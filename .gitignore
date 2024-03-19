@@ -1,0 +1,14 @@
+__pycache__
+.mypy_cache
+.pytest_cache
+.vscode
+*.pyc
+*.onnx
+runs
+ssh_runs
+slurm_logs
+*.npy
+*.nii.gz
+*.h5
+src/data/BraTS/*/*
+src/data/LM_OASIS/*/*
