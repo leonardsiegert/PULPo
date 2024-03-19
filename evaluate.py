@@ -24,16 +24,13 @@ from torchvision.transforms.functional import gaussian_blur
 import src
 from src.losses import HierarchicalReconstructionLoss, HierarchicalRegularization, L2_loss, Soft_dice_loss, NCC_loss, jacobian_det,JDetStd
 from src.network_blocks import ResizeTransform
-from src.data import mini_reg
-from src.data.OASIS import oasis
 from src.data.BraTS import brats
 from src.data.LM_OASIS import lm_oasis
-from src.models import PHIReg
-from mattias_model import RegModel
+from src.models import PULPo
 
 os.environ['NEURITE_BACKEND'] = 'pytorch'
 os.environ['VXM_BACKEND'] = 'pytorch'
-import voxelmorph as vxm  # nopep8
+# import voxelmorph as vxm  # nopep8
 
 # seeding for reproducibility
 # torch.manual_seed(0)
@@ -95,7 +92,7 @@ class Evaluate():
         checkpoint = self.build_path(model_dir, name)
         self.output_dir = model_dir + "/" + name + "/" + "evaluation"
         os.makedirs(self.output_dir, exist_ok=True)
-        model = PHIReg.load_from_checkpoint(checkpoint).to(self.device)
+        model = PULPo.load_from_checkpoint(checkpoint).to(self.device)
         model.eval()
         self.model = model
         self.latent_levels = model.latent_levels
@@ -1767,7 +1764,7 @@ class Evaluate():
             checkpoint = self.build_path(model_dir,m)
             self.load_model(model_dir=model_dir, git_hash=m.split("/")[0], version=m.split("/")[1])
 
-            model = PHIReg.load_from_checkpoint(checkpoint)
+            model = PULPo.load_from_checkpoint(checkpoint)
             model.eval()
             self.model = model
             self.latent_levels = model.latent_levels

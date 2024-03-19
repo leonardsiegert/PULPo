@@ -29,23 +29,16 @@ from src.metrics import per_label_dice, generalised_energy_distance
 from utils import convert_to_onehot, find_onehot_dimension, harden_softmax_outputs
 
 
-class AbstractHierarchicalProbabilisticModel(ABC, pl.LightningModule):
-    """
-    This is the base class for all conditional hierarchical models. This
-    can be extended also for other use cases then segmentation.
-    """
+class PULPo(ABC, pl.LightningModule):
 
     prior: AbstractPrior
     posterior: AbstractPosterior
     decoder: AbstractDecoder
-
     hierarchical_kl_loss: HierarchicalKLLoss
     hierarchical_recon_loss: HierarchicalReconstructionLoss
     hierarchical_regularization: HierarchicalRegularization
-
     total_levels: int
     latent_levels: int
-
     validation_counter = 0
 
     def predict_output_samples(self, x: torch.Tensor, y: torch.Tensor, N: int = 1) -> tuple[torch.Tensor,torch.Tensor]:
@@ -54,30 +47,33 @@ class AbstractHierarchicalProbabilisticModel(ABC, pl.LightningModule):
         yb = torch.vstack([y for _ in range(N)])
         down_activations = self.downpath(xb, yb)
         posterior_mus, posterior_sigmas, z, control_points, individual_dfs, combined_dfs, final_dfs, outputs = self.autoencoder(xb, down_activations)
-        # for key in posterior_sigmas:
-        #     print(f"posterior_sigmas {key} min: ", posterior_sigmas[key].min())
-        #     print(f"posterior_sigmas {key} max: ", posterior_sigmas[key].max())
-        #     print(f"posterior_sigmas {key} avg: ", posterior_sigmas[key].mean())
-        #     print(f"posterior_mus {key} min: ", posterior_mus[key].min())
-        #     print(f"posterior_mus {key} max: ", posterior_mus[key].max())
-        #     print(posterior_mus[key].unique())
         # reshape them from BxN,C,H,W(,D) to B,N,C,H,W(,D)
         outputs_reshaped = {key:outputs[key].view([N, bs]+[*outputs[key].shape][1:]).transpose(0,1) for key in outputs}
         individual_dfs_reshaped = {key:individual_dfs[key].view([N, bs]+[*individual_dfs[key].shape][1:]).transpose(0,1) for key in individual_dfs}
         return outputs_reshaped, individual_dfs_reshaped
 
-class AbstractHierarchicalProbabilisticRegistrationModel(
-    AbstractHierarchicalProbabilisticModel
-):
-    """
-    This is the base class for all hierarchical probabilistic registration models such as PHIReg
-    """
-
-    # This should average over the dfs from N samples
-    # and then apply the average df to the moving image
-    # should return outputs, dfs
+    def predict(self, x: torch.Tensor, y: torch.Tensor, N: int = 1) -> torch.Tensor:
+        _, individual_dfs = self.predict_output_samples(x, y, N)
+        # average the dfs over N
+        avg_dfs = {key:individual_dfs[key].mean(dim=1) for key in individual_dfs}
+        # combine the average dfs
+        avg_combined_dfs, avg_final_dfs = self.combine_dfs(avg_dfs)
+        # apply the combined df to the moving image
+        avg_outputs = {key: self.autoencoder.decoders[key].spatial_transform(avg_final_dfs[key], x) for key in avg_final_dfs}
+        return avg_outputs, avg_dfs
     
-    # resize a dict of dfs to the size of the first df or a target size
+    def predict_deterministic(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+        down_activations = self.downpath(x, y)
+        mu, _, z, control_points, individual_dfs, combined_dfs, final_dfs, outputs = self.autoencoder(x, down_activations, deterministic=True)
+        return outputs, individual_dfs
+
+
+    def forward(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:  # type: ignore[override]
+        down_activations = self.downpath(x, y)
+        _, _, _, _, _, _, _, outputs = self.autoencoder(x, down_activations)
+        return outputs[0]
+
+        # resize a dict of dfs to the size of the first df or a target size
     def resize_dfs(self, dfs: OutputDictType, target_size: list[int] = None) -> OutputDictType:
         scaled_dfs = {}
         for l in range(dfs.keys()):
@@ -117,28 +113,6 @@ class AbstractHierarchicalProbabilisticRegistrationModel(
         
             return combined_dfs, final_dfs
 
-
-    def predict(self, x: torch.Tensor, y: torch.Tensor, N: int = 1) -> torch.Tensor:
-        _, individual_dfs = self.predict_output_samples(x, y, N)
-        # average the dfs over N
-        avg_dfs = {key:individual_dfs[key].mean(dim=1) for key in individual_dfs}
-        # combine the average dfs
-        avg_combined_dfs, avg_final_dfs = self.combine_dfs(avg_dfs)
-        # apply the combined df to the moving image
-        avg_outputs = {key: self.autoencoder.decoders[key].spatial_transform(avg_final_dfs[key], x) for key in avg_final_dfs}
-        return avg_outputs, avg_dfs
-    
-    def predict_deterministic(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
-        down_activations = self.downpath(x, y)
-        mu, _, z, control_points, individual_dfs, combined_dfs, final_dfs, outputs = self.autoencoder(x, down_activations, deterministic=True)
-        return outputs, individual_dfs
-
-
-    def forward(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:  # type: ignore[override]
-        down_activations = self.downpath(x, y)
-        _, _, _, _, _, _, _, outputs = self.autoencoder(x, down_activations)
-        return outputs[0]
-
     def transform_segmentation(self, dfs: OutputDictType, seg: torch.Tensor) -> OutputDictType:
         # dictionary for the segmentations on all levels but the original
         # dictionary for x on the scale of the latent levels. highest level having original size
@@ -171,6 +145,19 @@ class AbstractHierarchicalProbabilisticRegistrationModel(
         # new_lm = lm + df[:,:,lm[0,:,0],lm[0,:,1],lm[0,:,2]].transpose(-2,-1)
         new_lm = lm - df[:,:,lm[0,:,0],lm[0,:,1],lm[0,:,2]].transpose(-2,-1)
         return new_lm
+
+    @torch.no_grad()
+    def _log_images_in_grid(
+        self, imgs: torch.Tensor, name: str):
+        bs = imgs.shape[0]
+        nrow = int(math.sqrt(bs))
+        imgrid = make_grid(imgs, nrow=nrow)
+        self.logger.experiment.add_image(name, imgrid, self.trainer.global_step)  # type: ignore[union-attr]
+
+    def configure_optimizers(self):
+        optimizer = torch.optim.Adam(self.parameters(), lr=self.hparams.lr)
+        return optimizer
+
 
     def training_step(self, batch, batch_idx):
         x,y,seg_x,seg_y,lm1,lm2,mask1,mask2 = batch
@@ -378,28 +365,6 @@ class AbstractHierarchicalProbabilisticRegistrationModel(
 
         return total_loss
 
-    @torch.no_grad()
-    def _log_images_in_grid(
-        self, imgs: torch.Tensor, name: str):
-        bs = imgs.shape[0]
-        nrow = int(math.sqrt(bs))
-        imgrid = make_grid(imgs, nrow=nrow)
-        self.logger.experiment.add_image(name, imgrid, self.trainer.global_step)  # type: ignore[union-attr]
-
-
-    def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), lr=self.hparams.lr)
-        return optimizer
-
-
-
-class PHIReg(AbstractHierarchicalProbabilisticRegistrationModel):
-
-    """
-    The actual PHIReg is now just defined by the network architecture and
-    the losses
-    """
-
     def __init__(
         self,
         total_levels: int,
@@ -428,7 +393,7 @@ class PHIReg(AbstractHierarchicalProbabilisticRegistrationModel):
     ) -> None:
         super().__init__()
 
-        from src.components.phireg import DownPath, Autoencoder, PHIRegEncoder, BSplineDecoder, SVFDecoder, PHIRegPrior
+        from src.components.pulpo import DownPath, Autoencoder, PULPoEncoder, BSplineDecoder, SVFDecoder, PULPoPrior
 
         # Make all arguments to init accessible via self.hparams (e.g.
         # self.hparams.total_levels) and save hyperparameters to checkpoint
@@ -461,7 +426,7 @@ class PHIReg(AbstractHierarchicalProbabilisticRegistrationModel):
         if self.df_combination == "add":
             self.df_combiner = DFAdder()        
 
-        self.prior = PHIRegPrior()
+        self.prior = PULPoPrior()
         self.downpath = DownPath(
             total_levels = self.total_levels,
             latent_levels = self.latent_levels,

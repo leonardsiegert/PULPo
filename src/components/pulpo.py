@@ -9,7 +9,7 @@ from src.network_blocks import ConvSequence, MuSigmaBlock, ControlPoints, Spatia
 from src.base import AbstractPrior, AbstractPosterior, AbstractDecoder
 
 
-# Note about indexing in this class: PHIReg has two types of levels:
+# Note about indexing in this class: PULPo has two types of levels:
 # latent levels and resolution (total) levels. In this class latent
 # levels are always index by l, total levels are indexed by k. All
 # layers are indexed using total levels (k). All outputs in the
@@ -139,7 +139,7 @@ class Autoencoder(nn.Module):
 
         self.encoders = ModuleIntDict()
         for l in range(latent_levels):
-            self.encoders[l] = PHIRegEncoder(
+            self.encoders[l] = PULPoEncoder(
                 sampler = self.sampler,
                 num_channels = num_channels[self.lk_offset + l],
                 zdim = zdim,
@@ -245,7 +245,7 @@ class Autoencoder(nn.Module):
 
 
 
-class PHIRegEncoder(nn.Module):
+class PULPoEncoder(nn.Module):
     def __init__(
         self,
         sampler: SamplerType,
@@ -421,7 +421,7 @@ class SVFDecoder(nn.Module):
 
 
 
-class PHIRegPrior(AbstractPrior):
+class PULPoPrior(AbstractPrior):
     def __init__(
         self,
     ) -> None:

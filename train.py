@@ -8,11 +8,9 @@ from icecream import install
 install()
 #ic.disable()
 
-from src.data import mini_reg
-from src.data.OASIS import oasis
 from src.data.BraTS import brats
 from src.data.LM_OASIS import lm_oasis
-from src.models import PHIReg
+from src.models import PULPo
 from evaluate import Evaluate
 
 #################################################################################################################################################################################
@@ -77,16 +75,6 @@ def main(hparams):
                                         mask=hparams.mask,
                                         ndims=hparams.ndims,
                                         interpatient=hparams.interpatient)
-    elif hparams.dataset == "oasis":
-        (
-                train_loader,
-                test_loader,
-                validation_loader,
-            ) = oasis.create_train_test_val_loaders(batch_size=hparams.batch_size, 
-                                                    segs=hparams.segs, 
-                                                    lms=hparams.lms, 
-                                                    mask=hparams.mask, 
-                                                    ndims=hparams.ndims)
     elif hparams.dataset == "lm_oasis":
         (
             train_loader,
@@ -103,7 +91,7 @@ def main(hparams):
 
     input_size = next(iter(train_loader))[0].shape[2:]
 
-    model = PHIReg(segs=hparams.segs, lms=hparams.lms, mask=hparams.mask, nondiagonal=hparams.nondiagonal, cp_depth=hparams.cp_depth,
+    model = PULPo(segs=hparams.segs, lms=hparams.lms, mask=hparams.mask, nondiagonal=hparams.nondiagonal, cp_depth=hparams.cp_depth,
                    total_levels=hparams.total_levels, latent_levels=hparams.latent_levels, zdim=2, input_size=input_size,
                    beta=hparams.beta, lr=hparams.learning_rate, recon_loss=hparams.recon_loss, dice_factor=hparams.dice_factor,
                    ncc_factor=hparams.ncc_factor, similarity_pyramid= hparams.similarity_pyramid, lamb=hparams.lamb, regularizer=hparams.regularizer,
