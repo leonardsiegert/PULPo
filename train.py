@@ -17,26 +17,25 @@ from evaluate import Evaluate
 ##########  HYPERPARAMETERS                   ###################################################################################################################################
 #################################################################################################################################################################################
 accelerator = "cpu"
-dataset = "oasis"
+dataset = "brats"
 segs = False
 lms = False
 mask = False
-total_levels = 6
+total_levels = 5
 latent_levels = 4
+# TODO: put values from paper as default values
 beta = 1
 batch_size = 12
 learning_rate = 1e-4
-recon_loss = ["mse"]
+recon_loss = ["ncc"]
 dice_factor=50
-ncc_factor=100
+ncc_factor=20
 similarity_pyramid = False
 lamb = 0
 regularizer = "jdet"
 image_logging_frequency = 1000
-decoder = "SVF" # "BSpline"
 feedback = ["samples"]
-df_resolution = "full_res" # "full_res" or "level_res"
-df_combination = "add" # "add" currently only option
+df_resolution = "level_res" # "full_res" or "level_res"
 ndims = 3
 
 
@@ -92,11 +91,11 @@ def main(hparams):
     input_size = next(iter(train_loader))[0].shape[2:]
 
     model = PULPo(segs=hparams.segs, lms=hparams.lms, mask=hparams.mask, nondiagonal=hparams.nondiagonal, cp_depth=hparams.cp_depth,
-                   total_levels=hparams.total_levels, latent_levels=hparams.latent_levels, zdim=2, input_size=input_size,
+                   total_levels=hparams.total_levels, latent_levels=hparams.latent_levels, input_size=input_size,
                    beta=hparams.beta, lr=hparams.learning_rate, recon_loss=hparams.recon_loss, dice_factor=hparams.dice_factor,
                    ncc_factor=hparams.ncc_factor, similarity_pyramid= hparams.similarity_pyramid, lamb=hparams.lamb, regularizer=hparams.regularizer,
-                   image_logging_frequency=hparams.image_logging_frequency, decoder=hparams.decoder, feedback=hparams.feedback,
-                   df_resolution=hparams.df_resolution, df_combination=hparams.df_combination, n0=hparams.n0)
+                   image_logging_frequency=hparams.image_logging_frequency, feedback=hparams.feedback,
+                   df_resolution=hparams.df_resolution, n0=hparams.n0)
 
 
     logger = TensorBoardLogger(
@@ -171,14 +170,12 @@ if __name__ == "__main__":
     parser.add_argument("--lambda", type=float, default=lamb, dest="lamb", help="Lambda of regularization. Setting to 0 equals no regularization.")
     parser.add_argument("--regularizer", type=str, default=regularizer, help="Regularizer to use. Default is jdet. Alternatives: L2.")
     parser.add_argument("--image_logging_frequency", type=int, default=image_logging_frequency)
-    parser.add_argument("--decoder", type=str, default=decoder, help="Decoder to use. Default is BSpline. Alternative is SVF.")
     parser.add_argument("--feedback", nargs='+', default=feedback, help="Feedback connection between sampling layers. Default is combined_df. Options: samples, control_points, individual_dfs, combined_dfs, final_dfs, transformed.")
     parser.add_argument("--df_resolution", type=str, default=df_resolution, help="Whether the dfs and thus transformed images are created at the resolution of 2x the sampling or at full resolution. Options: full_res, level_res.")
-    parser.add_argument("--df_combination", type=str, default=df_combination, help="Method used to combine dfs. Options: add.")
     parser.add_argument("--n0", type=int, default=batch_size)
     parser.add_argument("--ndims", type=int, default=ndims, help="Choose here if you want to work with volumes (3) or slices (2). Default is 2.")
     parser.add_argument("--interpatient", action='store_true', default=False, help="Whether to use the interpatient dataset or not. Only relevant for the BraTS dataset.")
-    parser.add_argument("--nondiagonal", action='store_true', default=False, help="Whether to use the nondiagonal prior and KL or not.")
+    parser.add_argument("--nondiagonal", action='store_true', default=False, help="Whether to use the nondiagonal prior and respective KL loss or not.")
     parser.add_argument("--cp_depth", type=int, default=3, help="Depth of the control point layer. Default is 3.")
     
     args = parser.parse_args()

@@ -6,7 +6,6 @@ from typing import Optional
 from src.custom_types import SamplerType, OutputDictType
 from src.utils import ModuleIntDict
 from src.network_blocks import ConvSequence, MuSigmaBlock, ControlPoints, SpatialTransformer, ResizeTransform, DFAdder, BSplineInterpolate, VecInt
-from src.base import AbstractPrior, AbstractPosterior, AbstractDecoder
 
 
 # Note about indexing in this class: PULPo has two types of levels:
@@ -149,9 +148,7 @@ class Autoencoder(nn.Module):
 
         
         self.decoders = ModuleIntDict()
-        if decoder == "BSpline":
-            self.decoder = BSplineDecoder
-        elif decoder == "SVF":
+        if decoder == "SVF":
             self.decoder = SVFDecoder
         else:
             raise ValueError(f"Decoder is {decoder}. Not a known option.")
@@ -292,56 +289,6 @@ class PULPoEncoder(nn.Module):
 
         return mu, sigma, z
 
-    
-class BSplineDecoder(nn.Module):
-    def __init__(
-        self,
-        zdim: int,
-        insize: list[int],
-        outsize: list[int],
-        df_resolution: str,
-        n0: int = 32,
-    ) -> None:
-        super().__init__()
-        self.zdim = zdim
-        self.insize = insize
-        self.outsize = outsize
-        
-        # turning the sample z into control points
-        self.control_points = ControlPoints(input_size=self.insize, zdim=self.zdim, max_channels=n0, depth=3)
-
-        # transforms the control points into a deformation field
-        self.deformation_field = BSplineInterpolate(size=self.outsize)
-        # combines the DFs
-        self.vel_resize = 1 if df_resolution == "full_res" else 1 / (self.outsize[0] / self.insize[0]) # this should be 0.5 for everything except on the highest level it should go full res
-        self.resizer = ResizeTransform(self.vel_resize, ndims=len(self.insize))
-        self.combined_deformation_field = DFAdder()
-
-        self.spatial_transform = SpatialTransformer(self.outsize)
-
-
-
-    def forward(self, z: torch.Tensor, input_image: torch.Tensor, combined_df: Optional[torch.Tensor]=None) -> tuple[OutputDictType, OutputDictType, OutputDictType, OutputDictType]:
-        if combined_df != None:
-            ic(combined_df.shape)
-        # turning the sample z into control points
-        control_points = self.control_points(z)
-        ic(control_points.shape)
-        # transforms the control points into a deformation field
-        individual_df = self.deformation_field(control_points)
-        ic(individual_df.shape)
-        # combines the DFs
-        if combined_df is None: # on the lowest level
-            combined_df = individual_df
-        else:
-            combined_df = self.combined_deformation_field(self.resizer(combined_df), individual_df)
-        
-        ic(combined_df.shape)
-        
-        # spatially transform the image
-        transformed_image = self.spatial_transform(combined_df, input_image)
-        return control_points, individual_df, combined_df, combined_df, transformed_image
-
 class SVFDecoder(nn.Module):
     def __init__(
         self,
@@ -421,7 +368,7 @@ class SVFDecoder(nn.Module):
 
 
 
-class PULPoPrior(AbstractPrior):
+class PULPoPrior(nn.Module):
     def __init__(
         self,
     ) -> None:
