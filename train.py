@@ -4,10 +4,6 @@ from pytorch_lightning.callbacks import ModelCheckpoint
 import subprocess
 import argparse
 
-from icecream import install
-install()
-#ic.disable()
-
 from src.data.BraTS import brats
 from src.data.LM_OASIS import lm_oasis
 from src.models import PULPo
@@ -16,6 +12,7 @@ from evaluate import Evaluate
 #################################################################################################################################################################################
 ##########  HYPERPARAMETERS                   ###################################################################################################################################
 #################################################################################################################################################################################
+# TODO: just put these into the parser?
 accelerator = "cpu"
 dataset = "brats"
 segs = False
@@ -39,7 +36,7 @@ df_resolution = "level_res" # "full_res" or "level_res"
 ndims = 3
 
 
-
+# To save the checkpoint with current git hash
 def get_git_revision_short_hash() -> str:
     return (
         subprocess.check_output(["git", "rev-parse", "--short", "HEAD"])
@@ -47,10 +44,8 @@ def get_git_revision_short_hash() -> str:
         .strip()
     )
 
-
 def main(hparams):
-    print(hparams)
-    print()
+    pl.seed_everything(seed=hparams.random_seed)
 
     git_hash = get_git_revision_short_hash()
     human_readable_extra = ""
@@ -58,11 +53,6 @@ def main(hparams):
         [git_hash, f"seed={hparams.random_seed}", human_readable_extra]
     )
 
-    pl.seed_everything(seed=hparams.random_seed)
-
-    if hparams.segs and "dice" not in hparams.recon_loss:
-        raise ValueError("You are trying to load segmentations but dice is not in the recon_loss.")
-    
     if hparams.dataset == "brats":
         (
             train_loader,
@@ -127,7 +117,7 @@ def main(hparams):
         model=model, train_dataloaders=train_loader, val_dataloaders=validation_loader
     )
 
-    print("STARTING EVALUATION.")
+    print("TRAINING FINISHED, STARTING EVALUATION.")
     eval = Evaluate()
     eval.run_one_model(model_dir="runs", 
                         git_hash=experiment_name, 

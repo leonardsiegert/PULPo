@@ -5,14 +5,8 @@ from typing import Optional
 
 from src.custom_types import SamplerType, OutputDictType
 from src.utils import ModuleIntDict
-from src.network_blocks import ConvSequence, MuSigmaBlock, ControlPoints, SpatialTransformer, ResizeTransform, DFAdder, BSplineInterpolate, VecInt
+from src.network_blocks import ConvSequence, MuSigmaBlock, ControlPoints, SpatialTransformer, ResizeTransform, DFAdder, VecInt
 
-
-# Note about indexing in this class: PULPo has two types of levels:
-# latent levels and resolution (total) levels. In this class latent
-# levels are always index by l, total levels are indexed by k. All
-# layers are indexed using total levels (k). All outputs in the
-# forward pass are indexed using latent levels (l).
 class DownPath(nn.Module):
     def __init__(
         self,
@@ -37,25 +31,19 @@ class DownPath(nn.Module):
         # Create upsampling and downsampling layers (those can be reused)
         ndims = len(self.input_size)
         AvgPool = getattr(nn, 'AvgPool%dd' % ndims)
-        self.downsample = AvgPool(
-            kernel_size=2, stride=2, padding=0, ceil_mode=True
-        )
+        self.downsample = AvgPool(kernel_size=2, stride=2, padding=0, ceil_mode=True)
         
         # Create layers of main downstream path
-        self.down_blocks = ModuleIntDict(
-            {
-                0: ConvSequence(
-                    input_size=self.input_size,in_channels=input_channels, out_channels=num_channels[0], depth=3
-                )
-            }
-        )
+        self.down_blocks = ModuleIntDict({0: ConvSequence(input_size=self.input_size,
+                                                          in_channels=input_channels,
+                                                          out_channels=num_channels[0],
+                                                          depth=3)})
         for k in range(1, total_levels):
             self.down_blocks[k] = ConvSequence(
                 input_size=self.input_size,
                 in_channels=num_channels[k - 1],
                 out_channels=num_channels[k],
-                depth=3,
-            )
+                depth=3)
 
     def forward(
         self,
@@ -63,7 +51,7 @@ class DownPath(nn.Module):
         y: torch.Tensor,
     ) -> OutputDictType:
         
-        # concatenate the two images
+        # concatenate the two inputs
         x = torch.cat([x, y], dim=1)
 
         # Going all the way down on the encoding path
@@ -71,10 +59,7 @@ class DownPath(nn.Module):
         for k in range(1, self.total_levels):
             down_sampled = self.downsample(down_activations[k - 1])
             down_activations[k] = self.down_blocks[k](down_sampled)
-        # print all down activations shapes
-        # for k in range(self.total_levels):
-        #     print(f"down_activations[{k}].shape: {down_activations[k].shape}")
-
+            
         return down_activations
 
 
@@ -116,7 +101,7 @@ class Autoencoder(nn.Module):
             k: n0 * v for k, v in enumerate([1, 2, 4] + [6] * (total_levels - 3))
         }
 
-        # Create layers for feeding back latent variables to the hierarchy level above
+        # Create layers for feeding back latent variables to the above level
         up_block_channels = 0
         for item in self.feedback:
                     if item == "samples":
@@ -146,25 +131,15 @@ class Autoencoder(nn.Module):
                 n0 = n0,
             )
 
-        
         self.decoders = ModuleIntDict()
         if decoder == "SVF":
             self.decoder = SVFDecoder
         else:
             raise ValueError(f"Decoder is {decoder}. Not a known option.")
         for l in range(latent_levels):
-            # print(f"On latent level {l} insize is {self.level_sizes[self.lk_offset + l]} and outsize is {self.level_sizes[self.lk_offset + l]}.")
             self.decoders[l] = self.decoder(        
                 zdim = zdim,
-                # TODO: This insize outsize logic only applies to B-splines
-                # for SVFs, the insize is the outsize
-                # instead of the insize, we should have a parameter that determines the size of the previous level's control point grid
-                # maybe we can just use the insize of the previous level, and the outsize of the current level
                 insize = self.level_sizes[self.lk_offset + l],
-                # if we have full res outputs, input size equals output size
-                # on the highest level, we also always want full res outputs
-                # HACK: hardcoded this, change it !!!
-                # outsize = self.input_size if (self.df_resolution == "full_res" or l==0) else self.level_sizes[self.lk_offset + l - 1],
                 outsize = self.input_size if (self.df_resolution == "full_res" or l==0) else self.level_sizes[self.lk_offset + l],
                 df_resolution = self.df_resolution,
                 n0 = n0,
@@ -192,19 +167,13 @@ class Autoencoder(nn.Module):
         else:
             level_x = {0:x}
             # bring it to the size of the first latent level
-            # HACK: hardcoded this, change it !!!
             for k in range(self.lk_offset):
-            # for k in range(self.lk_offset-1):
                 level_x[0] = self.avgPool(level_x[0], kernel_size=2, stride=2, padding=0, ceil_mode=True)
             # bring it to the size of all latent levels
             for l in range(1, self.latent_levels):
                 level_x[l] = self.avgPool(level_x[l-1], kernel_size=2, stride=2, padding=0, ceil_mode=True)
             # set the original image on the lowest level
             level_x[0] = x
-
-        # # print all level_x keys and shapes
-        # for l in range(self.latent_levels):
-        #     print(f"level_x[{l}].shape: {level_x[l].shape}")
 
         # Going back up (switching to indexing by latent level)
         mus, sigmas, samples, control_points, individual_dfs, combined_dfs, final_dfs, transformed = {}, {}, {}, {}, {}, {}, {}, {}
@@ -229,11 +198,10 @@ class Autoencoder(nn.Module):
                         raise ValueError(f"Feedback list contains {item}. Not a known option.")
 
                 sample_upsampled = torch.cat(feedback, dim=1)
-                ic(sample_upsampled.shape)
                 sample_upsampled = self.up_blocks[k](sample_upsampled)
-                # print("feedback shape: ", sample_upsampled.shape)
 
                 mus[l], sigmas[l], samples[l] = self.encoders[l](down_activations[k], feedback=sample_upsampled)
+                # in deterministic case, we forward mu instead of samples from mu and sigma
                 if deterministic:
                     control_points[l], individual_dfs[l], combined_dfs[l], final_dfs[l], transformed[l] = self.decoders[l](mus[l], level_x[l], combined_df=combined_dfs[l+1])
                 else:    
@@ -278,10 +246,8 @@ class PULPoEncoder(nn.Module):
             mu, sigma = self.mu_sigma(down_activation)
         # on all other levels
         else:
-            ic(feedback.shape, down_activation.shape)
             intermediate = torch.cat([feedback, down_activation], dim=1)
             intermediate = self.sample_merge_block(intermediate)
-            # print("shape before sampling: ", intermediate.shape)
             mu, sigma = self.mu_sigma(intermediate)
 
         # Generate samples
@@ -305,61 +271,41 @@ class SVFDecoder(nn.Module):
         self.outsize = outsize
         self.cp_depth = cp_depth
         
-        # turning the sample z into control points
+        # to turn the sample z into control points
         self.control_points = ControlPoints(input_size=self.insize, zdim=self.zdim, max_channels=n0, depth=self.cp_depth)
 
-        # with svfs, this control point grid is the deformation field
-        
-        # combines the DFs
-        # Hardcoding this because why would it ever be different?
-        # THIS would not be different on full res:
-        self.vel_resize_feedback = 1 / 2 # this should be 0.5 for everything EVEN on the highest level, because we compute full res prediction after integration (?!)
-        self.resizer_feedback = ResizeTransform(self.vel_resize_feedback, ndims=len(self.insize))
-        # THIS would be different on full res:
-        self.vel_resize_output = 1 / (self.outsize[0] / self.insize[0]) # bc with SVFs we also have DFs the size of the CP grid, and then resize everything to output size
+        # To upscale the lower DF by factor 2
+        self.vel_resize_level = 1/2
+        self.resizer_level = ResizeTransform(self.vel_resize_level, ndims=len(self.insize))
+
+        # upscale the DF to ouput size, mainly relevant for l=0 where the output size is full res
+        self.vel_resize_output = 1 / (self.outsize[0] / self.insize[0])
         self.resizer_output = ResizeTransform(self.vel_resize_output, ndims=len(self.insize))
         
-        self.combined_deformation_field = DFAdder()
+        # which method to use for deformation fields combination between levels
+        self.combine_deformation_field = DFAdder()
 
-        # perform vector field integration to make the vector field diffeomorphic
+        # Vector field integration to make the vector field diffeomorphic
         self.integrate = VecInt(self.insize,nsteps=7)
-        
         
         self.spatial_transform = SpatialTransformer(self.outsize)
 
 
-    # TODO: check if the tranformations leave the initial thing intact
     # i.e. is the combined_df the same after integration?
     def forward(self, z: torch.Tensor, input_image: torch.Tensor, combined_df: Optional[torch.Tensor]=None) -> tuple[OutputDictType, OutputDictType, OutputDictType, OutputDictType]:
-        if combined_df != None:
-            ic(combined_df.shape)
         # turning the sample z into control points
         individual_df = self.control_points(z)
-        ic(individual_df.shape)
         # combine the DFs
         if combined_df is None: # on the lowest level
             combined_df = individual_df
         else:
-            combined_df = self.combined_deformation_field(self.resizer_feedback(combined_df), individual_df)
-        ic(combined_df.shape)
-        
-
-        # # resize the combined df to the output siz
-        # combined_df = self.resizer_output(combined_df)
-        # ic(combined_df.shape)
-        # # perform vector field integration to make the vector field diffeomorphic
-        # integrated_df = self.integrate(combined_df)
-        # ic(integrated_df.shape)
-
+            combined_df = self.combine_deformation_field(self.resizer_level(combined_df), individual_df)        
 
         # perform vector field integration to make the vector field diffeomorphic
         integrated_df = self.integrate(combined_df)
-        ic(integrated_df.shape)
 
         # resize the integrated df to the output size
         integrated_df = self.resizer_output(integrated_df)
-        ic("final size: ",integrated_df.shape)
-        ic("input_image size: ",input_image.shape)
         
         # spatially transform the image
         transformed_image = self.spatial_transform(integrated_df, input_image)
@@ -369,6 +315,7 @@ class SVFDecoder(nn.Module):
 
 
 class PULPoPrior(nn.Module):
+    """ Prior for the PULPo model. Currently only a standard normal distribution, but could be extended to a less naive prior."""
     def __init__(
         self,
     ) -> None:

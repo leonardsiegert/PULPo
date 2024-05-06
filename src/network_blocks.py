@@ -52,16 +52,10 @@ class MuSigmaBlock(nn.Module):
         ndims = len(input_size)
         Conv = getattr(nn, 'Conv%dd' % ndims)
         self._conv_mu = Conv(in_channels, zdim, kernel_size=1)
-        # self._conv_mu.weight = nn.Parameter(torch.normal(mean=0.0,std=1e-5,size=self._conv_mu.weight.shape))
-        # self._conv_mu.bias = nn.Parameter(torch.zeros(self._conv_mu.bias.shape))
         self._conv_sigma = nn.Sequential(
             Conv(in_channels, zdim, kernel_size=1),
             nn.Softplus(),
         )
-        # self._conv_sigma[0].weight = nn.Parameter(torch.normal(mean=0.0,std=1e-10,size=self._conv_sigma[0].weight.shape))
-        # # HACK: I guess this is roughly the idea of the VXM initialization
-        # self._conv_sigma[0].bias = nn.Parameter(torch.zeros(self._conv_sigma[0].bias.shape)-2.0)
-
     def forward(self, x: torch.Tensor):
         return [self._conv_mu(x), self._conv_sigma(x)]
     
@@ -181,30 +175,3 @@ class VecInt(nn.Module):
         for _ in range(self.nsteps):
             vec = vec + self.transformer(vec, vec)
         return vec
-    
-class BSplineInterpolate(nn.Module):
-    def __init__(self, size, order:Optional[int]=3, kernel_size:Optional[int]=7,stride:Optional[int]=1,padding:Optional[int]=3):
-        super().__init__()
-        # spatial dimensions
-        self.size = size
-        # how many times avg_pool is applied - does this make sense?
-        self.order = order
-        self.kernel_size = kernel_size
-        self.stride = stride
-        self.padding = padding
-
-        if len(self.size) == 2:
-            self.avg_pool = nn.AvgPool2d(kernel_size, stride=stride, padding=padding)
-            self.mode = 'bilinear'
-        elif len(self.size) == 3:
-            self.avg_pool = nn.AvgPool3d(kernel_size, stride=stride, padding=padding)
-            self.mode = 'trilinear'
-
-    def forward(self, control_points):
-        x = F.interpolate(control_points, size=self.size,mode=self.mode,align_corners=False)
-        ic(x.shape)
-        for o in range(self.order):
-            x = self.avg_pool(x)
-            ic(x.shape)
-
-        return x
