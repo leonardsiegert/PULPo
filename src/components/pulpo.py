@@ -290,8 +290,6 @@ class SVFDecoder(nn.Module):
         
         self.spatial_transform = SpatialTransformer(self.outsize)
 
-
-    # i.e. is the combined_df the same after integration?
     def forward(self, z: torch.Tensor, input_image: torch.Tensor, combined_df: Optional[torch.Tensor]=None) -> tuple[OutputDictType, OutputDictType, OutputDictType, OutputDictType]:
         # turning the sample z into control points
         individual_df = self.control_points(z)

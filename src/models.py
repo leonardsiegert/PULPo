@@ -73,7 +73,7 @@ class PULPo(ABC, pl.LightningModule):
         print("LEVEL SIZES: ", self.level_sizes)
 
         self.df_combiner = DFAdder()        
-        sampler: SamplerType = gauss_sampler
+        sampler = gauss_sampler
         self.prior = PULPoPrior()
 
         self.downpath = DownPath(

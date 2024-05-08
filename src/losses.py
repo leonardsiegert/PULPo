@@ -3,27 +3,24 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from typing import Union
-from src.custom_types import OutputDictType, ReconstructionLossType, KLDivergenceType
+from src.custom_types import OutputDictType, KLDivergenceType
 
 
 class KL_nondiagonal():
+    """KL divergence loss assuming a nondiagonal prior covariance matrix."""
     # works with shape [batch_size,3,H,W,D] or [batch_size,2,H,W]
     def __init__(self,inshape, prior_lambda=20) -> None:
-        self.prior_lambda = prior_lambda # 20 pls
+        self.prior_lambda = prior_lambda
         self.inshape = inshape
         self.ndims = len(inshape)
         self.prodsize = torch.prod(torch.tensor(inshape))
-        print("prodsize: ", self.prodsize)
         Conv = getattr(F, 'conv%dd' % self.ndims)
         # create Degree matrix
-        ones = torch.ones((1,1,*inshape)) # ones has shape [1,1,H,W,D]
+        ones = torch.ones((1,1,*inshape))
         kernel = (3,3) if self.ndims == 2 else (3,3,3)
         sum_filt = torch.ones((1,1,*kernel), requires_grad=False)
-        # D has shape [batch_size, 1, H, W, D]
         self.D = Conv(ones,sum_filt,bias=None,stride=1,padding=1) -1
         self.D = self.D.to(torch.device("cuda" if torch.cuda.is_available() else "cpu"))
-        print("device in KL: ", torch.device("cuda" if torch.cuda.is_available() else "cpu"))
-        print("D device: ", self.D.device)
     
     def precision_loss(self, flow_mean):
         sm = 0
@@ -38,10 +35,7 @@ class KL_nondiagonal():
 
 
     def loss(self, prior_mean, prior_sigma, flow_mean, flow_sigma):
-        """Returns KL[p0 || p1], where p1 is a naive prior N(0,1)"""
-        # flow_logsigma entspricht dem log der Covarianzmatrix
-        # unser sigma ist das kleine Sigma, also müssen wir log(sigma^2) nehmen, um flow_sigma zu machen
-        # our sigma is sigma, so we need to take log(sigma^2) to make flow_sigma
+        # We square our parameter σ to get to Σ = σ^2
         flow_sigma = flow_sigma**2
         # compute the trace of the covariance matrix
         sigma_term = self.prior_lambda * self.D * flow_sigma - torch.log(flow_sigma)
@@ -51,15 +45,13 @@ class KL_nondiagonal():
         return (torch.mean(sigma_term) + precision_term) * self.ndims * 0.5 * self.prodsize
 
 
-def KL_two_gauss_with_diag_cov(
-    mu0: torch.Tensor,
-    sigma0: torch.Tensor,
-    mu1: torch.Tensor,
-    sigma1: torch.Tensor,
-    eps: float = 1e-10,
-) -> torch.Tensor:
-
-    """Returns KL[p0 || p1]"""
+def KL_two_gauss_with_diag_cov(mu0: torch.Tensor,
+                               sigma0: torch.Tensor,
+                               mu1: torch.Tensor,
+                               sigma1: torch.Tensor,
+                               eps: float = 1e-10,
+                               ) -> torch.Tensor:
+    """Returns KL[p0 || p1] assuming diagonal covariance matrices."""
 
     sigma0_fs = torch.square(torch.flatten(sigma0, start_dim=1))
     sigma1_fs = torch.square(torch.flatten(sigma1, start_dim=1))
@@ -83,11 +75,6 @@ def KL_two_gauss_with_diag_cov(
                 dim=1,
             )
         )
-    # with naive prior:
-    # sigma0_fs = torch.square(torch.flatten(sigma0, start_dim=1))
-    # logsigma0_fs = torch.log(sigma0_fs + eps)
-    # mu0_f = torch.flatten(mu0, start_dim=1)
-    # return torch.mean(0.5 * torch.sum(sigma0_fs + torch.square(mu0_f) - logsigma0_fs - 1, dim=1))
 
 
 def L2_loss(input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
@@ -97,57 +84,56 @@ def L2_loss(input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
     return torch.mean(torch.sum(criterion(input=input, target=target),dim=sumdims))
 
 def NCC_loss(y_pred, y_true, win_size=9, ncc_factor=100):
-
-        Ii = y_true
-        Ji = y_pred
-
-        # get dimension of volume
-        # assumes Ii, Ji are sized [batch_size, *vol_shape, nb_feats]
-        # TODO: No, mine are shaped [batch_size, nb_feats, *vol_shape]
-        ndims = len(Ii.size()[2:])
-        assert ndims in [2, 3], "volumes should be 1 to 3 dimensions. found: %d" % ndims
-
-        # set window size
-        win = [win_size] * ndims
+    """The normalized cross-correlation loss replacing the default MSE reconstruction loss."""
         
-        # compute filters
-        sum_filt = torch.ones([1, 1, *win], device=Ii.device, requires_grad=False)
+    Ii = y_true
+    Ji = y_pred
 
-        pad_no = win[0] // 2
+    # get dimension of volume
+    ndims = len(Ii.size()[2:])
+    assert ndims in [2, 3], "volumes should be 1 to 3 dimensions. found: %d" % ndims
 
-        if ndims == 2:
-            stride = (1, 1)
-            padding = (pad_no, pad_no)
-        else:
-            stride = (1, 1, 1)
-            padding = (pad_no, pad_no, pad_no)
+    # set window size
+    win = [win_size] * ndims
+    
+    # compute filters
+    sum_filt = torch.ones([1, 1, *win], device=Ii.device, requires_grad=False)
 
-        # get convolution function
-        Conv = getattr(F, 'conv%dd' % ndims)
+    pad_no = win[0] // 2
 
-        # compute CC squares
-        I2 = Ii * Ii
-        J2 = Ji * Ji
-        IJ = Ii * Ji
+    if ndims == 2:
+        stride = (1, 1)
+        padding = (pad_no, pad_no)
+    else:
+        stride = (1, 1, 1)
+        padding = (pad_no, pad_no, pad_no)
 
-        I_sum = Conv(Ii, sum_filt, stride=stride, padding=padding)
-        J_sum = Conv(Ji, sum_filt, stride=stride, padding=padding)
-        I2_sum = Conv(I2, sum_filt, stride=stride, padding=padding)
-        J2_sum = Conv(J2, sum_filt, stride=stride, padding=padding)
-        IJ_sum = Conv(IJ, sum_filt, stride=stride, padding=padding)
+    # get convolution function
+    Conv = getattr(F, 'conv%dd' % ndims)
 
-        win_size = np.prod(win)
-        u_I = I_sum / win_size
-        u_J = J_sum / win_size
+    # compute CC squares
+    I2 = Ii * Ii
+    J2 = Ji * Ji
+    IJ = Ii * Ji
 
-        cross = IJ_sum - u_J * I_sum - u_I * J_sum + u_I * u_J * win_size
-        I_var = I2_sum - 2 * u_I * I_sum + u_I * u_I * win_size
-        J_var = J2_sum - 2 * u_J * J_sum + u_J * u_J * win_size
+    I_sum = Conv(Ii, sum_filt, stride=stride, padding=padding)
+    J_sum = Conv(Ji, sum_filt, stride=stride, padding=padding)
+    I2_sum = Conv(I2, sum_filt, stride=stride, padding=padding)
+    J2_sum = Conv(J2, sum_filt, stride=stride, padding=padding)
+    IJ_sum = Conv(IJ, sum_filt, stride=stride, padding=padding)
 
-        cc = cross * cross / (I_var * J_var + 1e-8)
-        # mean over the batch dimension, sum over spatial dimensions
-        cc = torch.mean(cc, dim=0)
-        return -torch.sum(cc) / ncc_factor
+    win_size = np.prod(win)
+    u_I = I_sum / win_size
+    u_J = J_sum / win_size
+
+    cross = IJ_sum - u_J * I_sum - u_I * J_sum + u_I * u_J * win_size
+    I_var = I2_sum - 2 * u_I * I_sum + u_I * u_I * win_size
+    J_var = J2_sum - 2 * u_J * J_sum + u_J * u_J * win_size
+
+    cc = cross * cross / (I_var * J_var + 1e-8)
+    # mean over the batch dimension, sum over spatial dimensions
+    cc = torch.mean(cc, dim=0)
+    return -torch.sum(cc) / ncc_factor
 
 def Soft_dice_loss(input: torch.Tensor, target: torch.Tensor, dice_factor=50) -> torch.Tensor:
     input_size = input.size()[2:]
@@ -215,18 +201,19 @@ def jacobian_det(deformation_field: torch.Tensor, lamb=None, normalize=True) -> 
 
 
 def JDetStd(deformation_field: torch.Tensor, lamb=0, normalize=True) -> torch.Tensor:
+    """The standard deviation of the Jacobian determinant as a regularization loss."""
     return lamb * jacobian_det(deformation_field, normalize=normalize).std()
 
 
 # Regularization loss for the deformation field based on the L2 norm of the gradient
 def L2_reg(deformation_field: torch.Tensor, lamb=0) -> torch.Tensor:
+    """The L2 norm of the deformation field gradient as a regularization loss."""
+
     num_dims = len(deformation_field.size()[2:])
     if num_dims == 2:
         H,W = deformation_field.size()[-2:]
         distH = (deformation_field[:,:,1:,1:] - deformation_field[:,:,:-1,1:])**2
         distW = (deformation_field[:,:,1:,1:] - deformation_field[:,:,1:,:-1])**2
-        # to get a picture, one could use the following:
-        # torch.nn.functional.pad(distH + distW, (0, 1, 0, 1))
         return (distH+distW).mean() * lamb * H * W
     elif num_dims == 3:
         H,W,D = deformation_field.size()[-3:]
@@ -237,6 +224,8 @@ def L2_reg(deformation_field: torch.Tensor, lamb=0) -> torch.Tensor:
 
 
 class HierarchicalKLLoss(nn.Module):
+    """Hierarchical KL divergence loss. Calculates the KL divergence between the prior and posterior on multiple levels.
+    The loss is a weighted sum of the KL divergences on each level. The weights are specified in the weight_dict."""
     def __init__(
         self,
         KL_divergence: KLDivergenceType,
@@ -283,12 +272,15 @@ class HierarchicalKLLoss(nn.Module):
                 all_levels[l] = w * self.KL_divergence(
                     posterior_mus[l], posterior_sigmas[l], prior_mus[l], prior_sigmas[l]
                 )
-            kl_loss += all_levels[l]  # type: ignore[assignment]
+            kl_loss += all_levels[l]
 
         return kl_loss, all_levels
 
 
 class HierarchicalReconstructionLoss(nn.Module):
+    """Hierarchical reconstruction loss. Calculates the reconstruction loss between the input and the output on multiple levels.
+    The loss is a weighted sum of the reconstruction losses on each level. The weights are specified in the weight_dict."""
+
     def __init__(
         self, recon_loss: list[str], weight_dict: dict[int, float], similarity_pyramid: bool,ndims: int, window_size: dict[int, float]
     ) -> None:
@@ -296,12 +288,10 @@ class HierarchicalReconstructionLoss(nn.Module):
 
         self.recon_loss = recon_loss
         self.weight_dict = weight_dict
-        # self.weight_dict_ncc = weight_dict.copy()
         latent_levels = len(weight_dict.keys())
         if similarity_pyramid:
             for l in self.weight_dict.keys():
                 self.weight_dict[l] = self.weight_dict[l] / 2**l
-                # self.weight_dict_ncc[l] = self.weight_dict_ncc[l] / 2**(latent_levels-1-l)
         self.window_size = window_size
         self.ndims = ndims
         if self.ndims == 3:
@@ -318,32 +308,26 @@ class HierarchicalReconstructionLoss(nn.Module):
         ncc_factor: int = 100,
         dice_factor: int = 50,
     ) -> Union[torch.Tensor, tuple[torch.Tensor, dict[int, torch.Tensor]]]:
-        loss: torch.Tensor = 0.0  # type: ignore[assignment]
+        loss: torch.Tensor = 0.0
         all_levels = {}
         for l, w in self.weight_dict.items():
             y_target = F.interpolate(y, size=y_hat[l].size()[2:], mode=self.mode, align_corners=False)
-            # if y_hat_seg is not None and seg_y is not None:
-            #     seg_target=F.interpolate(seg_y, size=y_hat_seg[l].size()[2:], mode=self.mode, align_corners=False)
-            # else:
-            #     seg_target=None
             all_levels[l] = 0.0
             if "mse" in self.recon_loss:
                 all_levels[l] += w * L2_loss(y_hat[l], y_target)
             if "ncc" in self.recon_loss:
                 all_levels[l] += w * NCC_loss(y_hat[l], y_target, ncc_factor=ncc_factor, win_size=self.window_size[l])
-                # all_levels[l] += self.weight_dict_ncc[l] * NCC_loss(y_hat[l], y_target, ncc_factor=ncc_factor, win_size=self.window_size[l])
             if "dice" in self.recon_loss:
                 seg_target=F.interpolate(seg_y, size=y_hat_seg[l].size()[2:], mode=self.mode, align_corners=False)
                 all_levels[l] += w * Soft_dice_loss(y_hat_seg[l], seg_target, dice_factor=dice_factor)
 
             all_levels[l] = all_levels[l] / len(self.recon_loss)
-            # all_levels[l] = w * combined_loss(recon_loss=self.recon_loss, seg_input=y_hat_seg[l],seg_target=seg_target,
-            #                                   y_pred=y_hat[l], y_target=F.interpolate(y, size=y_hat[l].size()[2:], mode=self.mode, align_corners=False),
-            #                                   ncc_factor=ncc_factor, win_size=self.window_size[l], dice_factor=dice_factor)
             loss += all_levels[l]
         return loss, all_levels
         
 class HierarchicalRegularization(nn.Module):
+    """Hierarchical regularization loss. Calculates the regularization loss on multiple levels.
+    The loss is a weighted sum of the regularization losses on each level. The weights are specified in the weight_dict."""
 
     def __init__(
         self, regularizer, weight_dict: dict[int, float], similarity_pyramid: bool

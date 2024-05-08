@@ -11,4 +11,4 @@ slurm_logs
 *.nii.gz
 *.h5
 src/data/BraTS/*/*
-src/data/LM_OASIS/*/*
+src/data/OASIS/*/*

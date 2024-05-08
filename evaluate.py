@@ -22,7 +22,7 @@ import src
 from src.losses import HierarchicalReconstructionLoss, HierarchicalRegularization, L2_loss, Soft_dice_loss, NCC_loss, jacobian_det,JDetStd
 from src.network_blocks import ResizeTransform
 from src.data.BraTS import brats
-from src.data.LM_OASIS import lm_oasis
+from src.data.OASIS import oasis
 from src.models import PULPo
 
 os.environ['NEURITE_BACKEND'] = 'pytorch'
@@ -44,11 +44,10 @@ class Evaluate():
         #####################################################################################################
         ####### SET PATHS               #####################################################################
         #####################################################################################################
-        self.data_location = "src/data/mini_reg.npy"
-        self.seg_location = "src/data/mini_reg_segs.npy"
         self.checkpoint_folder = "checkpoints/best-reconstruction*.ckpt"
 
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        
         #####################################################################################################
         ####### LOAD DATA               #####################################################################
         #####################################################################################################
@@ -67,7 +66,6 @@ class Evaluate():
         self.metrics = ...
         self.num_datasets, self.num_metrics = (..., ...)
 
-        # dont't change this
         self.model = None
         self.latent_levels = ...
         self.models = ...
@@ -109,12 +107,13 @@ class Evaluate():
         if task == "oasis":
             self.task = "oasis"
             (
-            self.train_loader,
-            self.test_loader,
-            self.validation_loader,
-            ) = oasis.create_train_test_val_loaders(batch_size=1, segs=segs, lms=lms, mask=mask, ndims=ndims)
-            self.loaders = [self.train_loader,self.validation_loader,self.test_loader]
-            self.loader_names = ["train","val","test"]
+                self.train_loader,
+                self.validation_loader,
+                self.test_loader_seg,
+                self.test_loader_lm,
+            ) = oasis.create_data_loaders(batch_size=1, segs=segs, lms=lms, mask=mask, ndims=ndims)
+            self.loaders = [self.train_loader,self.validation_loader,self.test_loader_seg,self.test_loader_lm]
+            self.loader_names = ["train","val","test_seg","test_lm"]
         elif task == "brats":
             self.task = "brats"
             (
@@ -124,16 +123,6 @@ class Evaluate():
             ) = brats.create_data_loaders(batch_size=1, segs=segs, lms=lms, mask=mask, ndims=ndims)
             self.loaders = [self.train_loader,self.validation_loader,self.test_loader]
             self.loader_names = ["train","val","test"]
-        elif task == "lm_oasis":
-            self.task = "lm_oasis"
-            (
-                self.train_loader,
-                self.validation_loader,
-                self.test_loader_seg,
-                self.test_loader_lm,
-            ) = lm_oasis.create_data_loaders(batch_size=1, segs=segs, lms=lms, mask=mask, ndims=ndims)
-            self.loaders = [self.train_loader,self.validation_loader,self.test_loader_seg,self.test_loader_lm]
-            self.loader_names = ["train","val","test_seg","test_lm"]
         else:
             raise Exception(f"Task {task} does not exist." )
         

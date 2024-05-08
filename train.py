@@ -5,7 +5,7 @@ import subprocess
 import argparse
 
 from src.data.BraTS import brats
-from src.data.LM_OASIS import lm_oasis
+from src.data.OASIS import oasis
 from src.models import PULPo
 from evaluate import Evaluate
 
@@ -64,13 +64,13 @@ def main(hparams):
                                         mask=hparams.mask,
                                         ndims=hparams.ndims,
                                         interpatient=hparams.interpatient)
-    elif hparams.dataset == "lm_oasis":
+    elif hparams.dataset == "oasis":
         (
             train_loader,
             validation_loader, 
             test_loader_seg, 
             test_loader_lm
-             ) = lm_oasis.create_data_loaders(batch_size=hparams.batch_size, 
+             ) = oasis.create_data_loaders(batch_size=hparams.batch_size, 
                                                 segs=hparams.segs, 
                                                 lms=False, 
                                                 mask=False, 
@@ -144,7 +144,7 @@ if __name__ == "__main__":
     parser.add_argument("--devices", type=int, default=None)
     parser.add_argument("--max_epochs", type=int, default=1000)
     parser.add_argument("--accelerator", type=str, default=accelerator)
-    parser.add_argument("--dataset", type=str, default=dataset, help="Dataset to use. Default is oasis. Alternatives: brats, lm_oasis.")
+    parser.add_argument("--dataset", type=str, default=dataset, help="Dataset to use. Default is brats. Alternative: oasis.")
     parser.add_argument("--segs", action='store_true', default=segs, help="Do we load segmentations from the dataset.")
     parser.add_argument("--lms", action='store_true', default=lms, help="Do we load landmarks from the dataset.")
     parser.add_argument("--mask", action='store_true', default=mask, help="Do we load masks from the dataset.")

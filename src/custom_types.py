@@ -7,11 +7,4 @@ from typing import Callable, Protocol
 SamplerType = Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
 
 OutputDictType = dict[int, torch.Tensor]
-KLDivergenceType = Callable[
-    [torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor], torch.Tensor
-]
-
-
-class ReconstructionLossType(Protocol):
-    def __call__(self, input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-        ...
+KLDivergenceType = Callable[[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor], torch.Tensor]
