@@ -348,39 +348,29 @@ class PULPo(ABC, pl.LightningModule):
     #################   HELPER FUNCTIONS   #####################################################
     ############################################################################################
 
-    # resize a dict of dfs to the size of the first df or a target size
-    def resize_dfs(self, dfs: dict[int, torch.Tensor], target_size: list[int] = None) -> dict[int, torch.Tensor]:
-        scaled_dfs = {}
-        for l in range(dfs.keys()):
-            if target_size == None:
-                resizer = ResizeTransform(vel_resize = 1 / (dfs[0].size()[0] / dfs[l].size()[0]), ndims = len(dfs[l].size()[2:]))
-            else:
-                resizer = ResizeTransform(vel_resize = 1 / (target_size[0] / dfs[l].size()[0]), ndims = len(target_size[2:]))
-            scaled_dfs[l] = resizer(dfs[l])
-        return scaled_dfs
-
-    # combine individual level dfs into the combined dfs
     def combine_dfs(self, individual_dfs: dict[int, torch.Tensor]) -> dict[int, torch.Tensor]:
-            combined_dfs, final_dfs = {}, {}
-            for l in reversed(range(self.latent_levels)):
-                if l+1 in combined_dfs:
-                    # resize the df to the size of the next level
-                    resizer = ResizeTransform(vel_resize = 1 / (individual_dfs[l].size()[2] / individual_dfs[l+1].size()[2]), ndims = len(self.input_size))
-                    combined_dfs[l] = self.df_combiner(individual_dfs[l], resizer(combined_dfs[l+1]))
-                else:
-                    combined_dfs[l] = individual_dfs[l]
-            for l in reversed(range(self.latent_levels)):
-                # integrate
-                integrate = VecInt(combined_dfs[l].size()[2:],nsteps=7)
-                integrate = integrate.to(combined_dfs[l].device)
-                final_dfs[l] = integrate(combined_dfs[l])
-                target_size = self.input_size if (l == 0 or self.hparams.df_resolution == "full_res") else combined_dfs[l].size()[2:]
-                resizer = ResizeTransform(vel_resize = 1 / (target_size[0] / final_dfs[l].size()[2]), ndims = len(self.input_size))
-                final_dfs[l] = resizer(final_dfs[l])
-            return combined_dfs, final_dfs
+        """ Combine individual level deformation fields into the combined level deformation fields
+            and integrate into final level deformation fields."""
+        combined_dfs, final_dfs = {}, {}
+        for l in reversed(range(self.latent_levels)):
+            if l+1 in combined_dfs:
+                # resize the df to the size of the next level
+                resizer = ResizeTransform(vel_resize = 1 / (individual_dfs[l].size()[2] / individual_dfs[l+1].size()[2]), ndims = len(self.input_size))
+                combined_dfs[l] = self.df_combiner(individual_dfs[l], resizer(combined_dfs[l+1]))
+            else:
+                combined_dfs[l] = individual_dfs[l]
+        for l in reversed(range(self.latent_levels)):
+            # integrate
+            integrate = VecInt(combined_dfs[l].size()[2:],nsteps=7)
+            integrate = integrate.to(combined_dfs[l].device)
+            final_dfs[l] = integrate(combined_dfs[l])
+            target_size = self.input_size if (l == 0 or self.hparams.df_resolution == "full_res") else combined_dfs[l].size()[2:]
+            resizer = ResizeTransform(vel_resize = 1 / (target_size[0] / final_dfs[l].size()[2]), ndims = len(self.input_size))
+            final_dfs[l] = resizer(final_dfs[l])
+        return combined_dfs, final_dfs
 
-    # If segmentation maps are given, they can also be transformed by the predicted dfs
     def transform_segmentation(self, dfs: dict[int, torch.Tensor], seg: torch.Tensor) -> dict[int, torch.Tensor]:
+        """ Transform segmentation maps by the predicted deformation fields on each level."""
         ndims = len(seg.shape[2:])
         avgPool = getattr(F, 'avg_pool%dd' % ndims)
         
@@ -398,13 +388,6 @@ class PULPo(ABC, pl.LightningModule):
             level_seg[0] = seg
         transformed_segs = {key: self.autoencoder.decoders[key].spatial_transform(dfs[key], level_seg[key]) for key in dfs}
         return transformed_segs
-
-    def warp_landmarks(self, lm: torch.Tensor, df:torch.Tensor) -> torch.Tensor:
-        # expects lm to be of shape (1, num_landmarks, ndims)
-        # expects df to be of shape (n_samples, ndims, H, W, D)
-        lm = lm.long()
-        new_lm = lm - df[:,:,lm[0,:,0],lm[0,:,1],lm[0,:,2]].transpose(-2,-1)
-        return new_lm
 
     @torch.no_grad()
     def _log_images_in_grid(

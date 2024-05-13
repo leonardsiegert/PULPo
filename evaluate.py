@@ -1442,7 +1442,7 @@ class Evaluate():
                             level_lm_mae = {key: 0 for key in range(self.latent_levels)}
                             # Make sure that the landmarks are not empty
                             if lm_x.numel() and lm_y.numel():
-                                level_lm_mae[0] = self.lm_mae(model.warp_landmarks(lm_x, final_dfs[0]).detach(), lm_y)
+                                level_lm_mae[0] = self.lm_mae(self.warp_landmarks(lm_x, final_dfs[0]).detach(), lm_y)
                             level_losses.append(level_lm_mae)
                     if "LM_Euclid" in self.metric_names:
                         if not loader.dataset.lms:
@@ -1451,7 +1451,7 @@ class Evaluate():
                             level_lm_euclid = {key: 0 for key in range(self.latent_levels)}
                             # Make sure that the landmarks are not empty
                             if lm_x.numel() and lm_y.numel():
-                                level_lm_euclid[0] = self.lm_euclid(model.warp_landmarks(lm_x, final_dfs[0]).detach(), lm_y)
+                                level_lm_euclid[0] = self.lm_euclid(self.warp_landmarks(lm_x, final_dfs[0]).detach(), lm_y)
                             level_losses.append(level_lm_euclid)
                     
                     for h, level_loss in enumerate(level_losses):
@@ -1528,7 +1528,7 @@ class Evaluate():
                         df_pred = preds[1]
                         lm_hat = self.warp_landmarks(lm1, df_pred)
                         all_df_pred = all_preds[6][0]
-                        warped_lms = model.warp_landmarks(lm1, all_df_pred)
+                        warped_lms = self.warp_landmarks(lm1, all_df_pred)
                         lm_var = self.lms_var(warped_lms).mean()
                         lm_ncc = self.lms_corr(lm_hat, warped_lms, lm2)
                         all_metrics[2,k,j] = lm_var.mean()

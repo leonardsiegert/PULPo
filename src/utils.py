@@ -1,7 +1,6 @@
 from typing import Iterable, Tuple, Optional, Mapping
 import torch.nn as nn
 
-
 def key_to_string(func):
     def inner(cls, *args):
         return func(cls, str(args[0]), *args[1:])
