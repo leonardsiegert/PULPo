@@ -3,7 +3,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 from typing import Optional
 
-from src.custom_types import SamplerType, OutputDictType
 from src.utils import ModuleIntDict
 from src.network_blocks import ConvSequence, MuSigmaBlock, ControlPoints, SpatialTransformer, ResizeTransform, DFAdder, VecInt
 
@@ -49,7 +48,7 @@ class DownPath(nn.Module):
         self,
         x: torch.Tensor,
         y: torch.Tensor,
-    ) -> OutputDictType:
+    ) -> dict[int, torch.Tensor]:
         
         # concatenate the two inputs
         x = torch.cat([x, y], dim=1)
@@ -68,7 +67,7 @@ class Autoencoder(nn.Module):
 
     def __init__(
         self,
-        sampler: SamplerType,
+        sampler,
         decoder: str,
         total_levels: int,
         latent_levels: int,
@@ -159,7 +158,7 @@ class Autoencoder(nn.Module):
         x: torch.Tensor,
         down_activations: ModuleIntDict,
         deterministic: bool = False,
-    ) -> tuple[OutputDictType, OutputDictType, OutputDictType, OutputDictType, OutputDictType, OutputDictType, OutputDictType]:
+    ) -> tuple[dict[int, torch.Tensor], dict[int, torch.Tensor], dict[int, torch.Tensor], dict[int, torch.Tensor], dict[int, torch.Tensor], dict[int, torch.Tensor], dict[int, torch.Tensor]]:
 
         # dictionary for x on the scale of the latent levels. highest level having original size
         if self.df_resolution == "full_res":
@@ -213,7 +212,7 @@ class Autoencoder(nn.Module):
 class PULPoEncoder(nn.Module):
     def __init__(
         self,
-        sampler: SamplerType,
+        sampler,
         num_channels: int,
         zdim: int,
         input_size: list[int],
@@ -239,7 +238,7 @@ class PULPoEncoder(nn.Module):
         self,
         down_activation: torch.Tensor,
         feedback: Optional[torch.Tensor] = None,
-    ) -> tuple[OutputDictType, OutputDictType, OutputDictType]:
+    ) -> tuple[dict[int, torch.Tensor], dict[int, torch.Tensor], dict[int, torch.Tensor]]:
 
         # on the lowest level
         if feedback is None:
@@ -290,7 +289,7 @@ class SVFDecoder(nn.Module):
         
         self.spatial_transform = SpatialTransformer(self.outsize)
 
-    def forward(self, z: torch.Tensor, input_image: torch.Tensor, combined_df: Optional[torch.Tensor]=None) -> tuple[OutputDictType, OutputDictType, OutputDictType, OutputDictType]:
+    def forward(self, z: torch.Tensor, input_image: torch.Tensor, combined_df: Optional[torch.Tensor]=None) -> tuple[dict[int, torch.Tensor], dict[int, torch.Tensor], dict[int, torch.Tensor], dict[int, torch.Tensor]]:
         # turning the sample z into control points
         individual_df = self.control_points(z)
         # combine the DFs
@@ -321,9 +320,9 @@ class PULPoPrior(nn.Module):
 
     def forward(
         self,
-        posterior_mus:OutputDictType,
-        posterior_sigmas:OutputDictType,
-    ) -> tuple[OutputDictType, OutputDictType]:
+        posterior_mus:dict[int, torch.Tensor],
+        posterior_sigmas:dict[int, torch.Tensor],
+    ) -> tuple[dict[int, torch.Tensor], dict[int, torch.Tensor]]:
         prior_mus, prior_sigmas = {}, {}
 
         for l in posterior_mus.keys():

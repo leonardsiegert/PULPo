@@ -17,7 +17,6 @@ from src.losses import (
     KL_two_gauss_with_diag_cov,
     KL_nondiagonal,
 )
-from src.custom_types import SamplerType, OutputDictType
 from src.network_blocks import gauss_sampler, SpatialTransformer, ResizeTransform, DFAdder, VecInt
 from src.components.pulpo import DownPath, Autoencoder, PULPoEncoder, SVFDecoder, PULPoPrior
 
@@ -350,7 +349,7 @@ class PULPo(ABC, pl.LightningModule):
     ############################################################################################
 
     # resize a dict of dfs to the size of the first df or a target size
-    def resize_dfs(self, dfs: OutputDictType, target_size: list[int] = None) -> OutputDictType:
+    def resize_dfs(self, dfs: dict[int, torch.Tensor], target_size: list[int] = None) -> dict[int, torch.Tensor]:
         scaled_dfs = {}
         for l in range(dfs.keys()):
             if target_size == None:
@@ -361,7 +360,7 @@ class PULPo(ABC, pl.LightningModule):
         return scaled_dfs
 
     # combine individual level dfs into the combined dfs
-    def combine_dfs(self, individual_dfs: OutputDictType) -> OutputDictType:
+    def combine_dfs(self, individual_dfs: dict[int, torch.Tensor]) -> dict[int, torch.Tensor]:
             combined_dfs, final_dfs = {}, {}
             for l in reversed(range(self.latent_levels)):
                 if l+1 in combined_dfs:
@@ -381,7 +380,7 @@ class PULPo(ABC, pl.LightningModule):
             return combined_dfs, final_dfs
 
     # If segmentation maps are given, they can also be transformed by the predicted dfs
-    def transform_segmentation(self, dfs: OutputDictType, seg: torch.Tensor) -> OutputDictType:
+    def transform_segmentation(self, dfs: dict[int, torch.Tensor], seg: torch.Tensor) -> dict[int, torch.Tensor]:
         ndims = len(seg.shape[2:])
         avgPool = getattr(F, 'avg_pool%dd' % ndims)
         

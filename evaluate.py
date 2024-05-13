@@ -2,7 +2,6 @@
 import os
 import glob
 import argparse
-import importlib
 import matplotlib.pyplot as plt
 from matplotlib.collections import LineCollection
 from matplotlib import cm
@@ -14,50 +13,37 @@ import torch
 import scipy.interpolate as si
 
 import gc
-import torch.nn as nn
-import torch.nn.functional as F
 from torchvision.utils import flow_to_image
 from torchvision.transforms.functional import gaussian_blur
-import src
 from src.losses import HierarchicalReconstructionLoss, HierarchicalRegularization, L2_loss, Soft_dice_loss, NCC_loss, jacobian_det,JDetStd
-from src.network_blocks import ResizeTransform
 from src.data.BraTS import brats
 from src.data.OASIS import oasis
 from src.models import PULPo
 
 os.environ['NEURITE_BACKEND'] = 'pytorch'
+# TODO: import vxm?
 os.environ['VXM_BACKEND'] = 'pytorch'
-# import voxelmorph as vxm  # nopep8
 
 # seeding for reproducibility
-# torch.manual_seed(0)
-# np.random.seed(0)
-# import random
-# random.seed(0)
+torch.manual_seed(0)
+np.random.seed(0)
 
 
 class Evaluate():
-
-    grid_size = 10
-
     def __init__(self):
-        #####################################################################################################
-        ####### SET PATHS               #####################################################################
-        #####################################################################################################
         self.checkpoint_folder = "checkpoints/best-reconstruction*.ckpt"
-
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         
         #####################################################################################################
         ####### LOAD DATA               #####################################################################
         #####################################################################################################
         self.num_inputs = ...
-        
         self.loaders = ...
         self.loader_names = ...
         self.segs = False
         self.lms = False
         self.mask = False
+        self.grid_size = 20
 
         #####################################################################################################
         ####### SELECT METRICS               ################################################################
@@ -78,11 +64,14 @@ class Evaluate():
     #####################################################################################################
 
     def build_path(self, model_dir,name):
+        """ Builds the path to the checkpoint file."""
         filepath = model_dir+"/"+name+"/"+self.checkpoint_folder
         checkpoint = glob.glob(filepath)[0]
         return checkpoint
     
     def load_model(self, model_dir, git_hash, version):
+        """ Loads the PULPo model from a given directory. git_has and version required as this is 
+            how the trained models are saved."""
         name = git_hash+"/"+version
         checkpoint = self.build_path(model_dir, name)
         self.output_dir = model_dir + "/" + name + "/" + "evaluation"
@@ -94,12 +83,14 @@ class Evaluate():
         return model
     
     def load_vxm(self,model_dir,name):
+        """ Loads the DIF-VM (vxm) baseline model from a given directory."""
         path = model_dir+"/"+name+".pt"
         self.model = vxm.networks.VxmDense.load(path, self.device)
         self.model.to(self.device)
         return self.model
     
     def load_data(self, task, segs, lms, mask, ndims):
+        """ Loads the data loaders for the given task."""
         self.segs = segs
         self.lms = lms
         self.mask = mask
@@ -136,11 +127,11 @@ class Evaluate():
             self.metrics += [self.lm_mae, self.lm_euclid]
             self.metric_names += ["LM_MAE", "LM_Euclid"]
         self.num_datasets, self.num_metrics = len(self.loaders), len(self.metrics)
-
         self.num_inputs = self.train_loader.dataset.__len__()
         return
     
     def sample_data(self, loader_name, index=0):
+        """ Samples one datapoint from the given loader. """
         # check which element in self.loader_names corresponds to loader_name
         loader_idx = self.loader_names.index(loader_name)
         loader = self.loaders[loader_idx]
@@ -155,10 +146,10 @@ class Evaluate():
         else:
             input = next(iter(loader))
         x,y,seg1,seg2,lm1,lm2,mask_x,mask_y = input
-
         return [x.to(self.device), y.to(self.device), seg1.to(self.device), seg2.to(self.device), lm1.to(self.device), lm2.to(self.device), mask_x.to(self.device), mask_y.to(self.device), loader_name]
 
     def predict(self, inputs, num_samples=20, deterministic=False):
+        """ Generates a prediction given the inputs with the current model."""
         with torch.no_grad():
             model = self.model
             x,y,seg_x,seg_y,lm_x,lm_y,mask_x,mask_y,loader = inputs
@@ -186,19 +177,18 @@ class Evaluate():
             else: # num_samples > 1
                 prediction_name = f"avg_prediction_over_{str(num_samples)}_samples"
                 if self.model.ndims == 3:
-                    # FOR NOW WE JUST DON'T DO SEGMENTATIONS FOR 3D UNCERTAINTY
+                    # we don't use segmentations for 3D uncertainty due to memory constraints
                     warped_seg = {}
                     warped_seg[0] = torch.empty((0,), dtype=torch.float32)
                     all_warped_seg = warped_seg
                     
-                    # we can't batch 3D predictions, so we have to make it iteratively:
+                    # we can't batch 3D predictions, so we have to predict iteratively
                     latent_levels = model.latent_levels
                     level_sizes = {0:[dim for dim in model.input_size]}
                     for k in range(model.total_levels-1):
                         curr = torch.ceil(torch.tensor(level_sizes[k])/2)
                         level_sizes[k+1] = [int(curr[i].item()) for i in range(len(model.input_size))]
                     # the outputs and final df are on the highest resolution on level 0
-                    # HACK: Removing -1 for the resolution thing
                     all_outputs = {key: torch.zeros((num_samples,1,*level_sizes[0]),device=self.device) if key==0 else
                                 torch.zeros((num_samples,1,*level_sizes[key+model.lk_offset]),device=self.device) for key in range(latent_levels)}
                     all_final_dfs = {key: torch.zeros((num_samples,3,*level_sizes[0]),device=self.device) if key==0 else
@@ -216,7 +206,7 @@ class Evaluate():
                             all_combined_dfs[key][i] = combined_dfs[key][0]
                             all_final_dfs[key][i] = final_dfs[key][0]
                     
-                    # get the average version of the stuff
+                    # calculate the averages
                     individual_dfs = {key:individual_dfs[key].mean(dim=0).unsqueeze(0) for key in all_individual_dfs}
                     combined_dfs, final_dfs = model.combine_dfs(individual_dfs)
                     outputs = {key:model.autoencoder.decoders[key].spatial_transform(final_dfs[key], x) for key in final_dfs}
@@ -224,9 +214,7 @@ class Evaluate():
                     # calculate the stds
                     output_std = {key:torch.mean(torch.std(all_outputs[key], axis=0),axis=0) for key in all_outputs}
                     if self.mask:
-                        # mask the dfs for std calculation
-                        # the mask is first pooled to the level sizes and then warped.
-                        # HACK: This pooling only works on accident. 2** key+1 is not the right way to calculate level sizes
+                        # mask the dfs for std calculation. The mask is first pooled to the level sizes and then warped.
                         warped_mask = {key:model.autoencoder.decoders[key].spatial_transform(final_dfs[key], mask_x) for key in final_dfs}
                         individual_df_std = {key:torch.mean(torch.std(all_individual_dfs[key], axis=0),axis=0) for key in all_outputs}
                         final_df_std = {key:torch.mean(torch.std(all_final_dfs[key]*model.autoencoder.decoders[key].spatial_transform(final_dfs[key], mask_x), axis=0),axis=0) for key in all_outputs}
@@ -243,7 +231,7 @@ class Evaluate():
                         warped_seg[0] = torch.empty((0,), dtype=torch.float32)
                         all_warped_seg = warped_seg
 
-                    # remember these for later
+                    # save these for later
                     all_outputs = {key:outputs[key].squeeze(0) for key in outputs}
                     all_individual_dfs = {key:individual_dfs[key].squeeze(0) for key in individual_dfs}
 
@@ -264,6 +252,7 @@ class Evaluate():
                         [output_std, individual_df_std, final_df_std, all_outputs, all_individual_dfs, all_combined_dfs, all_final_dfs, all_warped_seg])
 
     def predict_vxm(self, moving, fixed, num_samples=20, deterministic=False):
+        """ Generates a prediction given the inputs with the current DIF-VM baseline model."""
         if deterministic and num_samples != 1:
             raise Exception("Deterministic predictions can only be made for 1 sample.")
         if deterministic and num_samples == 1:
@@ -280,7 +269,7 @@ class Evaluate():
                 moved, warp, _ = self.model(moving, fixed, registration=True, deterministic=deterministic)
                 all_moved[i] = moved[0]
                 all_warp[i] = warp[0]
-            # get the average version of the stuff
+            # calculate the averages
             avg_moved = torch.mean(all_moved, axis=0).unsqueeze(0)
             avg_warp = torch.mean(all_warp, axis=0).unsqueeze(0)
             # calculate the stds
@@ -296,11 +285,13 @@ class Evaluate():
     ##################################################################################################################
 
     def rmse(self, input,target):
+        """ Computes the root mean squared error between two images. """
         criterion = torch.nn.MSELoss()
         mse = criterion(input, target)
         return torch.sqrt(mse)
 
     def dsc(self, input,target):
+        """ Computes the dice similarity coefficient between two segmentation maps. """
         input_size = input.size()[2:]
         sumdims = list(range(2, len(input_size) + 2))
         epsilon = 1e-6
@@ -308,6 +299,7 @@ class Evaluate():
         return dsc.mean()
 
     def jdet(self, df):
+        """ Computes the jacobian determinant of a displacement field. """
         jdet = jacobian_det(df, normalize=True)
         return jdet
 
@@ -331,70 +323,56 @@ class Evaluate():
             a = (a) / (np.std(a) * len(a) + eps)
             v = (v) / (np.std(v) + eps)
         return np.correlate(a, v)[0]
-    
-    # landmark metrics
+
     def lm_mae(self, lm1, lm2):
-        # median absolute error using manhattan distance
-        # lm1.shape = (1, n_landmarks, 3)
-        # lm2.shape = (1, n_landmarks, 3)
+        """ Computes the median manhattan distance (median absolute error) between two sets of landmarks
+            Args:
+                lm1 (torch.Tensor): first set of landmarks
+                            Shape: (1, n_landmarks, 3)
+                lm2 (torch.Tensor): second set of landmarks
+                            Shape: (1, n_landmarks, 3)
+            Returns:
+                float: the median manhattan distance between the landmarks
+        """
         distance = torch.abs(lm1-lm2).sum(dim=2)
         return torch.median(distance)
     
     def lm_euclid(self, lm1, lm2):
-        # mean euclidean distance
-        # lm1.shape = (1, n_landmarks, 3)
-        # lm2.shape = (1, n_landmarks, 3)
+        """ Computes the mean euclidean distance between two sets of landmarks
+            Args:
+                lm1 (torch.Tensor): first set of landmarks
+                            Shape: (1, n_landmarks, 3)
+                lm2 (torch.Tensor): second set of landmarks
+                            Shape: (1, n_landmarks, 3)
+            Returns:
+                float: the mean euclidean distance between the landmarks
+        """
         distance = torch.sqrt(((lm1-lm2)**2).sum(dim=2))
         return torch.mean(distance)
-    
-    # def lms_mse(self, lms, lm):
-    #     # mean squared error
-    #     # lms.shape = (n_samples, n_landmarks, 3)
-    #     # lm.shape = (1, n_landmarks, 3)
-    #     # output.shape = (n_landmarks,3)
-    #     # # return (torch.mean(lms,dim=0)-lm.squeeze(0))**2
-    #     # return torch.mean((lms-lm)**2, dim=0)
-    #     return torch.mean(torch.sum((lms-lm)**2, dim=-1), dim=0)
 
     def lms_var(self, lms):
-        # variance of euclidean distance between landmarks
-        # lms.shape = (n_samples, n_landmarks, 3)
-        # output.shape = (n_landmarks,3)
+        """ Computes the variance of the euclidean distance between landmarks
+            Args:
+                lms (torch.Tensor): set of landmarks
+                            Shape: (n_samples, n_landmarks, 3)
+            Returns:
+                torch.Tensor: the variance of the euclidean distance between landmarks
+                    Shape: (n_landmarks,3)
+        """
         return torch.mean(torch.var(lms, dim=0),dim=-1)
     
-    # def lms_corr(self, lms, lm):
-    #     # normalized cross (?) correlation of lm_mse and lm_var
-    #     # lms.shape = (n_samples, n_landmarks, 3lms_)
-    #     # lm.shape = (1, n_landmarks, 3)
-    #     # output.shape = (1)
-        
-    #     error = self.lms_mse(lms, lm) # (n_landmarks,3)
-    #     variance = self.lms_var(lms) # (n_landmarks,3)
-    #     print(error.shape, variance.shape)
-    #     ncc = 0
-    #     for i in range(3):
-    #         error_normed = (error[:,i] - torch.mean(error[:,i])) / (torch.std(error[:,i]) * error.shape[-2])
-    #         variance_normed = (variance[:,i] - torch.mean(variance[:,i])) / (torch.std(variance[:,i]))
-    #         ncc += np.correlate(error_normed.to("cpu"), variance_normed.to("cpu"))[0]
-    #     return ncc/3
-
-    # def lms_corr(self, lms, lm):
-    #     # normalized cross (?) correlation of lm_mse and lm_var
-    #     # lms.shape = (n_samples, n_landmarks, 3)
-    #     # lm.shape = (n_landmarks, 3)
-    #     # output.shape = (1)
-    #     error = torch.mean(torch.mean((lms-lm)**2, dim=-1), dim=0).flatten()
-    #     # error = self.lms_mse(lms, lm).flatten()
-    #     variance = self.lms_var(lms).flatten() / 3
-    #     error_normed = (error - torch.mean(error)) / (torch.std(error) * len(error))
-    #     variance_normed = (variance - torch.mean(variance)) / (torch.std(variance))
-    #     return np.correlate(error_normed.to("cpu"), variance_normed.to("cpu"))[0]
-    
     def lms_corr(self, lm_hat, lms, lm):
-        # normalized cross (?) correlation of lm_mse and lm_var
-        # lms.shape = (n_samples, n_landmarks, 3)
-        # lm.shape = (n_landmarks, 3)
-        # output.shape = (1)
+        """ Computes the normalized cross correlation between the mean squared error and the variance of the landmarks
+            Args:
+                lm_hat (torch.Tensor): predicted landmarks
+                            Shape: (n_landmarks, 3)
+                lms (torch.Tensor): set of sample prediction landmarks
+                            Shape: (n_samples, n_landmarks, 3)
+                lm (torch.Tensor): ground truth landmarks
+                            Shape: (n_landmarks, 3)
+            Returns:
+                float: the normalized cross correlation between the mean squared error and the variance of the landmarks
+        """
         error = torch.mean((lm_hat - lm)**2, dim=-1).flatten()
         variance = self.lms_var(lms).flatten()
         error_normed = (error - torch.mean(error)) / (torch.std(error) * len(error))
@@ -402,12 +380,17 @@ class Evaluate():
         return np.correlate(error_normed.to("cpu"), variance_normed.to("cpu"))[0]
 
     def warp_landmarks(self, lm: torch.Tensor, df:torch.Tensor) -> torch.Tensor:
-        # look up the displacement field at the landmark coordinates
-        # expects lm to be of shape (1, num_landmarks, ndims)
-        # expects df to be of shape (n_samples, ndims, H, W, D)
+        """ Warps a set of landmarks using a displacement field
+            Args:
+                lm (torch.Tensor): set of landmarks
+                            Shape: (1, n_landmarks, 3)
+                df (torch.Tensor): displacement field
+                            Shape: (n_samples, ndims, H, W, D)
+            Returns:
+                torch.Tensor: the warped landmarks
+                    Shape: (1, n_landmarks, 3)
+        """
         lm = lm.long()
-        # TODO: Why do I substract the df? Shouldn't I add it?
-        # new_lm = lm + df[:,:,lm[0,:,0],lm[0,:,1],lm[0,:,2]].transpose(-2,-1)
         new_lm = lm - df[:,:,lm[0,:,0],lm[0,:,1],lm[0,:,2]].transpose(-2,-1)
         return new_lm
 
@@ -415,8 +398,11 @@ class Evaluate():
     ########  Helpers for tables and visualizations           ########################################################
     ##################################################################################################################
 
-    # mostly taken and adapted from https://stackoverflow.com/questions/24612626/b-spline-interpolation-with-python
+    # adapted from https://stackoverflow.com/questions/24612626/b-spline-interpolation-with-python
     def bspline_interpolate(self, points):
+        """ Interpolates a set of points using a b-spline. We use this to interpolate the 
+            line segments of the control point grid that visualizes the displacement fields.
+        """
         points = points.tolist()
         degree = 3
 
@@ -426,7 +412,6 @@ class Evaluate():
         y_right = points[-1][1]
         
         points = [[points[0][0] - dist_x_left,y_left]] + points + [[points[-1][0] + dist_x_right,y_right],[points[-1][0] + 2*dist_x_right,y_right]]
-        # points = [[points[0][0] - 2*dist_x_left,y_left],[points[0][0] - dist_x_left,y_left]] + points + [[points[-1][0] + dist_x_right,y_right],[points[-1][0] + 2*dist_x_right,y_right],[points[-1][0] + 3*dist_x_right,y_right]]
         points = np.array(points)
         n_points = len(points)
         x = points[:,0]
@@ -451,10 +436,19 @@ class Evaluate():
         return np.stack((np.array(x_i), np.array(y_i)), axis=1)
     
 
-    def create_warped_grid(self, df, control_points):
-        # expects input of shape (1,2,H,W) 
-        # returns
-        grid_i,grid_j = torch.meshgrid(torch.linspace(0,df.shape[-2]-1,control_points),torch.linspace(0,df.shape[-1]-1,control_points), indexing="ij")
+    def create_warped_grid(self, df, grid_size):
+        """ Creates a grid of control points that are warped by the displacement field.
+            This grid is used to visualize the displacement field.
+            Args:
+                df (torch.Tensor): displacement field
+                            Shape: (1, ndims, H, W(, D))
+                control_points (int): number of control points
+            Returns:
+                grid_i, grid_j (torch.Tensor, torch.Tensor): The unstacked grid components
+                        Shape: (control_points, control_points), (control_points, control_points)
+        """
+        
+        grid_i,grid_j = torch.meshgrid(torch.linspace(0,df.shape[-2]-1,grid_size),torch.linspace(0,df.shape[-1]-1,grid_size), indexing="ij")
         grid = torch.stack((grid_i,grid_j))
         grid = grid.type(torch.float32)
         for i in range(grid.shape[-2]):
@@ -466,10 +460,19 @@ class Evaluate():
         return grid_i, grid_j
     
     def plot_grid(self,x,y, scatter=False, lines=True, straightlines=False, ax=None, **kwargs):
+        """ Plots a grid of control points that are warped by the displacement field.
+            This grid is used to visualize the displacement field.
+            Args:
+                x (torch.Tensor): The unstacked x-components of the grid
+                            Shape: (control_points, control_points)
+                y (torch.Tensor): The unstacked y-components of the grid
+                            Shape: (control_points, control_points)
+            Returns:
+                None
+        """
         ax = ax or plt.gca()
-        # horizontal lines
+        # horizontal line segments
         segs1 = np.stack((y,x), axis=2)
-        # segs1 = np.stack((x,y), axis=2)
         # create bspline-interpolated horizontal lines
         int_lines1 = np.zeros(shape=(segs1.shape[0],1000,2))
         for i in range(segs1.shape[0]):
@@ -492,13 +495,18 @@ class Evaluate():
         if lines:
             ax.add_collection(LineCollection(int_lines1, **kwargs))
             ax.add_collection(LineCollection(int_lines2, **kwargs))
-        # ax.autoscale()
         return
 
     ##################################################################################################################
-    ########  Space for the tables                   #################################################################
+    ########  Helpers for the tables                   ###############################################################
     ##################################################################################################################
     def convert_to_scientific(self,value):
+        """ Converts a value to scientific notation if it is close to zero.
+            Args:
+                value (float): The value to convert
+            Returns:
+                str: The value in scientific notation
+        """
         if abs(value) < 0.001 and abs(value) > 0.0:
             return format(value, '.2e')
         else:
@@ -507,6 +515,8 @@ class Evaluate():
     # creates a table from a df and saves it as a tex and svg file 
     # if no name is given, the table is not saved
     def make_tables(self, df, output_dir, show=False, name=None, fontsize=4):
+        """ Creates a table from a dataframe and saves it as a tex and svg file.
+            If no name is given, the table is not saved."""
         df = df.applymap(self.convert_to_scientific)
         # write latex table
         latex_table = df.style.to_latex()
@@ -516,7 +526,6 @@ class Evaluate():
         ax.axis('off')
         table = ax.table(cellText=df.values, colLabels=df.columns, rowLabels=df.index, loc='center')
         table.auto_set_font_size(False)
-        # TODO: Set Font Size to change figure width
         table.set_fontsize(fontsize)
         table.auto_set_column_width(col=list(range(len(df.columns))))
         fig.tight_layout()
@@ -527,16 +536,12 @@ class Evaluate():
             with open(output_dir+"/"+name+".tex","w+") as f:
                     f.writelines(latex_table)
             fig.savefig(output_dir+"/"+name+".svg")
+        return
 
     def table_jdet(self, inputs, preds, output_dir=None, name="", show=True, save=False, fontsize=4):
-        x,y,seg_x,seg_y,lm_x,lm_y,mask_x,mask_y,loader = inputs
-
-        # if self.task == "brats":
-        #     x,y,_ = inputs
-        # elif self.mask:
-        #     x,y,seg_x,seg_y,mask_x,mask_y,_ = inputs
-        # else:
-        #     x,y,seg_x,seg_y,_ = inputs
+        """ Creates a table with the standard deviation of the jacobian determinant and 
+            the percentage of pixels with jacobian determinant <=0 for the combined and individual deformation fields.
+        """
         y_pred, df_pred, y_pred_seg, outputs, individual_dfs, combined_dfs, final_dfs, warped_seg, prediction_name = preds
         output_dir = output_dir if output_dir is not None else self.output_dir
         data = np.zeros((self.latent_levels,4))
@@ -566,6 +571,7 @@ class Evaluate():
             self.make_tables(df, output_dir, show=show, name="jdet_"+name, fontsize=4)
         else:
             self.make_tables(df, output_dir, show=show, fontsize=4)
+        return
 
     ##################################################################################################################
     ########  Space for the visualizations           #################################################################
@@ -573,16 +579,16 @@ class Evaluate():
 
     def artifact(self, image_tensor, method, x, y, z=None):
         """
-        Blurs a region of an image represented as a PyTorch tensor.
-
+        Inserts an artificial artifact into a region of an image.
         Args:
             image_tensor (torch.Tensor): A PyTorch tensor representing the image.
-            top_left (tuple): A tuple of integers representing the (x, y) coordinates of the top-left corner of the region to blur.
-            bottom_right (tuple): A tuple of integers representing the (x, y) coordinates of the bottom-right corner of the region to blur.
-            blur_radius (float): The radius of the blur kernel.
-
+            method (str): The method to use for creating the artifact. Options are "blur", "noise", "mean", "white", "black", and "checkerboard".
+            x (tuple): The x-coordinates of the region to insert the artifact.
+            y (tuple): The y-coordinates of the region to insert the artifact.
+            z (tuple): The z-coordinates of the region to insert the artifact. Only required for 3D images.
+            
         Returns:
-            A new PyTorch tensor representing the blurred image.
+            torch.Tensor: A new PyTorch tensor representing the augmented image.
         """
         inshape = image_tensor.shape[2:]
 
@@ -645,6 +651,17 @@ class Evaluate():
     # visualize one or several visualizations together in one plot
     # visualizations is a list of functions
     def visualize(self, inputs, preds, visualizations, all_preds=None, rowparams={}, title="", show=False, save_path=None):
+        """ Visualizes one or several visualization together in one plot.
+            Args:
+                inputs (list): The inputs as returned by sample_data()
+                preds (list): The predictions as returned by predict()
+                visualizations (list): Which visualization methods to plot
+                all_preds (list): The additional predictions as returned by predict()
+                rowparams (dict): An optional dictionary giving additional parameters to selected rows
+                title (str): The title of the plot
+                show (bool): Whether to show the plot
+                save_path (str): The path to save the plot
+        """
         # SLICE TO 2D
         new_inputs = []
         new_preds = []
@@ -745,26 +762,23 @@ class Evaluate():
         preds = new_preds
         all_preds = new_all_preds
 
-
-        # VISUALIZE
+        # visualize
         rows = len(visualizations)
         cols = 4
         fig, ax = plt.subplots(rows,cols)
         fig.set_figwidth(30)
         fig.set_figheight(30 * rows/self.latent_levels)
-        # cax = fig.add_axes([0.95, 0.05, 0.02, 0.95]) #this locates the axis that is used for your colorbar. It is scaled 0 - 1. 
-
+        # cax = fig.add_axes([0.95, 0.05, 0.02, 0.95]) #this locates the axis that is used for a colorbar. It is scaled 0 - 1. 
         if title == None:
             ...
         elif title != "":
             fig.suptitle(title + f". {preds[-1]} on the {inputs[-1]} set.", fontsize=16)
         else:
             fig.suptitle(f" {preds[-1]} on the {inputs[-1]} set.", fontsize=16)
-        # necessary, so that calling ax[r,c] works always
-        if len(visualizations) == 1:
+        if len(visualizations) == 1: # necessary, so that calling ax[r,c] works even if there is only one row
             ax = [ax]
         for r in range(rows):
-            if visualizations[r] in [self.vis_output_std_per_level, self.vis_individual_df_std_per_level, self.vis_final_df_std_per_level, self.vis_sample_preds, self.vis_sample_segpreds, self.vis_sample_dfs]:
+            if visualizations[r] in [self.vis_output_var_per_level, self.vis_individual_df_var_per_level, self.vis_final_df_var_per_level, self.vis_sample_preds, self.vis_sample_segpreds, self.vis_sample_dfs]:
                 if r in rowparams.keys():
                     visualizations[r](ax[r], inputs, preds, all_preds, **rowparams[r])
                 else:
@@ -777,6 +791,7 @@ class Evaluate():
             for c in range(cols):
                 ax[r][c].set_xticks([], [])
                 ax[r][c].set_yticks([], [])
+            # use the following if you want to add a colorbar
             # if r == 0:
             #     fig.colorbar(ax[0][3], cax, orientation = 'vertical') #'ax0' tells it which plot to base the colors on
 
@@ -787,8 +802,8 @@ class Evaluate():
         plt.close()
         return
 
-    # plot the input, the predicted output, the ground truth and the flow field
     def vis_x_pred_y(self, ax, inputs, preds, vmin=0, vmax=1):
+        """ Visualizes the moving image, the predicted fixed image, the ground truth fixed image and the flow field."""
         x,y,seg_x,seg_y,lm_x,lm_y,mask_x,mask_y,loader = inputs
         y_pred, df_pred, y_pred_seg, outputs, individual_dfs, combined_dfs, final_dfs, warped_seg, prediction_name = preds
 
@@ -810,8 +825,8 @@ class Evaluate():
         cbar.set_ticklabels(["\u2190","\u2193","\u2192", "\u2191"])
         return
     
-    # Segmentation: plot the input, the predicted output, the ground truth and the flow field
     def vis_segx_segpred_segy(self, ax, inputs, preds):
+        """ Visualizes the moving segmentation, the predicted fixed segmentation, the ground truth fixed segmentation and the flow field."""
         x,y,seg_x,seg_y,lm_x,lm_y,mask_x,mask_y,loader = inputs
         y_pred, df_pred, y_pred_seg, outputs, individual_dfs, combined_dfs, final_dfs, warped_seg, prediction_name = preds
 
@@ -830,7 +845,6 @@ class Evaluate():
         ax[3].set_xlabel("DF")
         ax[0].set_ylabel("segmentation input vs prediction")
 
-
         # colorbar
         cmap = get_cmap('hsv')
         cbar = plt.colorbar(cm.ScalarMappable(cmap=cmap), ax=ax[3])
@@ -838,8 +852,8 @@ class Evaluate():
         cbar.set_ticklabels(["\u2190","\u2193","\u2192", "\u2191"])
         return
     
-    # plot the prediction of each output level
     def vis_pred_per_level(self, ax, inputs, preds, vmin=0, vmax=1):
+        """ Visualizes the prediction of each output level of PULPo."""
         x,y,seg_x,seg_y,lm_x,lm_y,mask_x,mask_y,loader = inputs
         y_pred, df_pred, y_pred_seg, outputs, individual_dfs, combined_dfs, final_dfs, warped_seg, prediction_name = preds
             
@@ -849,37 +863,11 @@ class Evaluate():
         ax[0].set_ylabel("Predictions per level")
         if self.latent_levels < 4:
             for l in range(self.latent_levels,4):
-                # ax[l].set_visible(False)
                 ax[l].axis('off')
         return
     
-    # DOESN't WORK CUZ WOULD NEED 3D STUFF
-    #     # plot the prediction of each output level
-    # def vis_pred_per_level_fs(self, ax, inputs, preds, vmin=0, vmax=1):
-    #     x,y,seg_x,seg_y,lm_x,lm_y,mask_x,mask_y,loader = inputs
-    #     y_pred, df_pred, y_pred_seg, outputs, individual_dfs, combined_dfs, final_dfs, warped_seg, prediction_name = preds
-
-    #     for l in reversed(range(self.latent_levels)):
-    #         # resize the final_df[l] to the size of x
-    #         resizer = ResizeTransform(vel_resize= 1 / (x.shape[-1] / final_dfs[l].shape[-1]), ndims=2)
-    #         print("final_dfs shape", final_dfs[l].shape)
-    #         final_dfs[l] = resizer(final_dfs[l])
-    #         print("final_dfs shape", final_dfs[l].shape)
-    #     print(x.shape, final_dfs[3].shape)
-    #     fs_outputs = {key: self.model.autoencoder.decoders[key].spatial_transform(final_dfs[key], x) for key in range(self.latent_levels)}
-        
-    #     for l in reversed(range(self.latent_levels)):
-    #         ax[self.latent_levels-l-1].imshow(np.rot90(fs_outputs[l][0,0]), "gray", vmin=vmin, vmax=vmax)
-    #         ax[self.latent_levels-l-1].set_xlabel(f"Level {l}")
-    #     ax[0].set_ylabel("Predictions per level Full Scale")
-    #     if self.latent_levels < 4:
-    #         for l in range(self.latent_levels,4):
-    #             # ax[l].set_visible(False)
-    #             ax[l].axis('off')
-    #     return
-    
-        # plot the prediction of each output level
     def vis_segpred_per_level(self, ax, inputs, preds):
+        """ Visualizes the predicted segmentation of each output level of PULPo."""
         x,y,seg_x,seg_y,lm_x,lm_y,mask_x,mask_y,loader = inputs
         y_pred, df_pred, y_pred_seg, outputs, individual_dfs, combined_dfs, final_dfs, warped_seg, prediction_name = preds
             
@@ -889,7 +877,6 @@ class Evaluate():
         ax[0].set_ylabel("Predicted segmentation per level")
         if self.latent_levels < 4:
             for l in range(self.latent_levels,4):
-                # ax[l].set_visible(False)
                 ax[l].axis('off')
         return
 
@@ -897,61 +884,60 @@ class Evaluate():
 
     # plot the difference of the input and the prediction of each output level
     def vis_diff_input_pred(self, ax, inputs, preds, vmin=-1, vmax=1):
+        """ Visualizes the difference of the input/moving image and the predicted fixed image of each output level."""
         x,y,seg_x,seg_y,lm_x,lm_y,mask_x,mask_y,loader = inputs
         y_pred, df_pred, y_pred_seg, outputs, individual_dfs, combined_dfs, final_dfs, warped_seg, prediction_name = preds
             
         for l in reversed(range(self.latent_levels)):
-            # torch.nn.F.interpolate outputs[l][0,0] to have same size as x[0,0]
+            # use interpolate for x[0,0] to have the same size as outputs[l][0,0]
             ax[self.latent_levels-l-1].imshow(np.rot90(outputs[l][0,0] - torch.nn.functional.interpolate(x, size=outputs[l][0,0].shape, mode="bilinear", align_corners=False)[0,0]), "gray", vmin=vmin, vmax=vmax)
-            # ax[self.latent_levels-l-1].imshow(F.interpolate(outputs[l][0,0], size=) - x[0,0], "gray")
             ax[self.latent_levels-l-1].set_xlabel(f"Level {l}")
         ax[0].set_ylabel("Difference Input / Predictions per level")
         if self.latent_levels < 4:
             for l in range(self.latent_levels,4):
-                # ax[l].set_visible(False)
                 ax[l].axis('off')
         return
     
-    # plot the difference of the target and the prediction of each output level
     def vis_diff_target_pred(self, ax, inputs, preds, vmin=-1, vmax=1):
+        """ Visualizes the difference of the target/fixed image and the predicted fixed image of each output level."""
         x,y,seg_x,seg_y,lm_x,lm_y,mask_x,mask_y,loader = inputs
         y_pred, df_pred, y_pred_seg, outputs, individual_dfs, combined_dfs, final_dfs, warped_seg, prediction_name = preds
             
         for l in reversed(range(self.latent_levels)):
-            # use interpolate to get the same size as y[0,0]
+            # use interpolate for y[0,0] to have the same size as outputs[l][0,0]
             ax[self.latent_levels-l-1].imshow(np.rot90(outputs[l][0,0] - torch.nn.functional.interpolate(y, size=outputs[l][0,0].shape, mode="bilinear", align_corners=False)[0,0]), "gray", vmin=vmin, vmax=vmax)
-            # ax[self.latent_levels-l-1].imshow(outputs[l][0,0] - y[0,0], "gray")
             ax[self.latent_levels-l-1].set_xlabel(f"Level {l}")
         ax[0].set_ylabel("Difference Target / Predictions per level")
         if self.latent_levels < 4:
             for l in range(self.latent_levels,4):
-                # ax[l].set_visible(False)
                 ax[l].axis('off')
         return
 
     def vis_jdet(self, ax, inputs, preds):
+        """ Visualizes the jacobian determinant of the final deformation field for each level of PULPo."""
         x,y,seg_x,seg_y,lm_x,lm_y,mask_x,mask_y,loader = inputs
         y_pred, df_pred, y_pred_seg, outputs, individual_dfs, combined_dfs, final_dfs, warped_seg, prediction_name = preds
 
         for l in reversed(range(self.latent_levels)):
-            heatplot = sns.heatmap(np.rot90(jacobian_det(final_dfs[l])[0].detach()), ax=ax[self.latent_levels-l-1], cmap=sns.diverging_palette(10,250,sep=1,n=100), center=0., vmin=-2,vmax=4)
-            # remove the legend for all but the last
+            heatplot = sns.heatmap(np.rot90(jacobian_det(final_dfs[l])[0].detach()),
+                                   ax=ax[self.latent_levels-l-1],
+                                   cmap=sns.diverging_palette(10,250,sep=1,n=100),
+                                   center=0., vmin=-2,vmax=4)
+            # remove the legend for all but the last column
             if l != 0:
                 heatplot.collections[0].colorbar.remove()
-            # colorbar = ax[self.latent_levels-l-1].collections[0].colorbar
-            # heatplot.collections[0].colorbar.remove()
             ax[self.latent_levels-l-1].set_xlabel(f"Level {l}")
         
-        # put a colorbar on l 4
+        # use to set colorbar for the last column
         # colorbar = plt.colorbar(heatplot.collections[0], ax=ax[4])
         ax[0].set_ylabel("heatmap of JDet std")
         if self.latent_levels < 4:
             for l in range(self.latent_levels,4):
-                # ax[l].set_visible(False)
                 ax[l].axis('off')
         return
     
     def vis_final_df_per_level(self, ax, inputs, preds, flow=True, grid=True):
+        """ Visualizes the final deformation field of each level of PULPo."""
         x,y,seg_x,seg_y,lm_x,lm_y,mask_x,mask_y,loader = inputs
         y_pred, df_pred, y_pred_seg, outputs, individual_dfs, combined_dfs, final_dfs, warped_seg, prediction_name = preds
 
@@ -966,10 +952,8 @@ class Evaluate():
         ax[0].set_ylabel("Final DF per level.")
         if self.latent_levels < 4:
             for l in range(self.latent_levels,4):
-                # ax[l].set_visible(False)
                 ax[l].axis('off')
-
-        # colorbar
+        # use to also plot a colorbar
         # cmap = get_cmap('hsv')
         # cbar = plt.colorbar(cm.ScalarMappable(cmap=cmap), ax=ax[3])
         # cbar.set_ticks([0.18,0.51,0.7,1.0])
@@ -977,6 +961,7 @@ class Evaluate():
         return
 
     def vis_combined_df_per_level(self, ax, inputs, preds, flow=True, grid=True):
+        """ Visualizes the combined deformation field of each level of PULPo."""
         x,y,seg_x,seg_y,lm_x,lm_y,mask_x,mask_y,loader = inputs
         y_pred, df_pred, y_pred_seg, outputs, individual_dfs, combined_dfs, final_dfs, warped_seg, prediction_name = preds
 
@@ -991,10 +976,9 @@ class Evaluate():
         ax[0].set_ylabel("Combined DF per level.")
         if self.latent_levels < 4:
             for l in range(self.latent_levels,4):
-                # ax[l].set_visible(False)
                 ax[l].axis('off')
 
-        # colorbar
+        # use to also plot a colorbar
         # cmap = get_cmap('hsv')
         # cbar = plt.colorbar(cm.ScalarMappable(cmap=cmap), ax=ax[3])
         # cbar.set_ticks([0.18,0.51,0.7,1.0])
@@ -1002,6 +986,7 @@ class Evaluate():
         return
 
     def vis_individual_df_per_level(self, ax, inputs, preds, flow=True, grid=True):
+        """ Visualizes the individual deformation field of each level of PULPo."""
         x,y,seg_x,seg_y,lm_x,lm_y,mask_x,mask_y,loader = inputs
         y_pred, df_pred, y_pred_seg, outputs, individual_dfs, combined_dfs, final_dfs, warped_seg, prediction_name = preds
 
@@ -1016,35 +1001,33 @@ class Evaluate():
         ax[0].set_ylabel("Individual DF per level.")
         if self.latent_levels < 4:
             for l in range(self.latent_levels,4):
-                # ax[l].set_visible(False)
                 ax[l].axis('off')
 
-        # colorbar
+        # use to also plot a colorbar
         # cmap = get_cmap('hsv')
         # cbar = plt.colorbar(cm.ScalarMappable(cmap=cmap), ax=ax[3])
         # cbar.set_ticks([0.18,0.51,0.7,1.0])
         # cbar.set_ticklabels(["\u2190","\u2193","\u2192", "\u2191"])
         return
     
-    def vis_output_std_per_level(self, ax, inputs, preds, all_preds):
+    def vis_output_var_per_level(self, ax, inputs, preds, all_preds):
+        """ Visualizes the variance of the prediction of each output level of PULPo."""
         x,y,seg_x,seg_y,lm_x,lm_y,mask_x,mask_y,loader = inputs
         y_pred, df_pred, y_pred_seg, outputs, individual_dfs, combined_dfs, final_dfs, warped_seg, prediction_name = preds
         output_std, individual_df_std, final_df_std, all_outputs, all_individual_dfs, all_combined_dfs, all_final_dfs, all_warped_seg = all_preds
 
         for l in reversed(range(self.latent_levels)):
-            heatplot = sns.heatmap(np.rot90(output_std[l]**2), ax=ax[self.latent_levels-l-1])#,vmin=0,vmax=0.3)
+            heatplot = sns.heatmap(np.rot90(output_std[l]**2), ax=ax[self.latent_levels-l-1])
             heatplot.collections[0].colorbar.remove()
-            # for the entropy
-            # sns.heatmap(0.5*np.log(2*np.pi*output_std[l]**2+1e-8), ax=ax[self.latent_levels-l-1])
             ax[self.latent_levels-l-1].set_xlabel(f"Level {l}")
-        ax[0].set_ylabel("heatmap of prediction std")
+        ax[0].set_ylabel("heatmap of prediction variance")
         if self.latent_levels < 4:
             for l in range(self.latent_levels,4):
-                # ax[l].set_visible(False)
                 ax[l].axis('off')
         return
     
-    def vis_individual_df_std_per_level(self, ax, inputs, preds, all_preds):
+    def vis_individual_df_var_per_level(self, ax, inputs, preds, all_preds):
+        """ Visualizes the variance of the individual deformation field of each level of PULPo."""
         x,y,seg_x,seg_y,lm_x,lm_y,mask_x,mask_y,loader = inputs
         y_pred, df_pred, y_pred_seg, outputs, individual_dfs, combined_dfs, final_dfs, warped_seg, prediction_name = preds
         output_std, individual_df_std, final_df_std, all_outputs, all_individual_dfs, all_combined_dfs, all_final_dfs, all_warped_seg = all_preds
@@ -1052,24 +1035,22 @@ class Evaluate():
         for l in reversed(range(self.latent_levels)):
             # mask
             if l == 0:
-                # bring outputs[l] to half the size
+                # reduces outputs[l]'s size by a factor of 2
                 sth = torch.nn.functional.interpolate(outputs[l], size=(outputs[l].shape[-2]//2,outputs[l].shape[-1]//2), mode="bilinear", align_corners=False)
                 individual_df_std[l][sth[0,0]==0] = 0
             else:
                 individual_df_std[l][outputs[l][0,0]==0] = 0
-            heatplot = sns.heatmap(np.rot90(individual_df_std[l]), ax=ax[self.latent_levels-l-1])#,vmin=0,vmax=4)
+            heatplot = sns.heatmap(np.rot90(individual_df_std[l]**2), ax=ax[self.latent_levels-l-1])
             heatplot.collections[0].colorbar.remove()
-            # for the entropy
-            # sns.heatmap(0.5*np.log(2*np.pi*individual_df_std[l]**2+1e-8), ax=ax[self.latent_levels-l-1])
             ax[self.latent_levels-l-1].set_xlabel(f"Level {l}")
-        ax[0].set_ylabel("heatmap of individual DF std")
+        ax[0].set_ylabel("heatmap of individual DF var")
         if self.latent_levels < 4:
             for l in range(self.latent_levels,4):
-                # ax[l].set_visible(False)
                 ax[l].axis('off')
         return
     
-    def vis_final_df_std_per_level(self, ax, inputs, preds, all_preds):
+    def vis_final_df_var_per_level(self, ax, inputs, preds, all_preds):
+        """ Visualizes the variance of the final deformation field of each level of PULPo."""
         x,y,seg_x,seg_y,lm_x,lm_y,mask_x,mask_y,loader = inputs
         y_pred, df_pred, y_pred_seg, outputs, individual_dfs, combined_dfs, final_dfs, warped_seg, prediction_name = preds
         output_std, individual_df_std, final_df_std, all_outputs, all_individual_dfs, all_combined_dfs, all_final_dfs, all_warped_seg = all_preds
@@ -1077,19 +1058,17 @@ class Evaluate():
         for l in reversed(range(self.latent_levels)):
             # mask
             final_df_std[l][outputs[l][0,0]==0] = 0
-            heatplot = sns.heatmap(np.rot90(final_df_std[l]**2), ax=ax[self.latent_levels-l-1])#,vmin=0,vmax=4)
+            heatplot = sns.heatmap(np.rot90(final_df_std[l]**2), ax=ax[self.latent_levels-l-1])
             heatplot.collections[0].colorbar.remove()
-            # for the entropy
-            # sns.heatmap(0.5*np.log(2*np.pi*final_df_std[l]**2+1e-8), ax=ax[self.latent_levels-l-1])
             ax[self.latent_levels-l-1].set_xlabel(f"Level {l}")
-        ax[0].set_ylabel("heatmap of final DF std")
+        ax[0].set_ylabel("heatmap of final DF var")
         if self.latent_levels < 4:
             for l in range(self.latent_levels,4):
-                # ax[l].set_visible(False)
                 ax[l].axis('off')
         return
     
     def vis_sample_preds(self, ax, inputs, preds, all_preds, level=0, vmin=0, vmax=1):
+        """ Visualizes sample predictions of PULPo."""
         x,y,seg_x,seg_y,lm_x,lm_y,mask_x,mask_y,loader = inputs
         y_pred, df_pred, y_pred_seg, outputs, individual_dfs, combined_dfs, final_dfs, warped_seg, prediction_name = preds
         output_std, individual_df_std, final_df_std, all_outputs, all_individual_dfs, all_combined_dfs, all_final_dfs, all_warped_seg = all_preds
@@ -1100,6 +1079,7 @@ class Evaluate():
         return
     
     def vis_sample_segpreds(self, ax, inputs, preds, all_preds, level=0):
+        """ Visualizes sample segmentations of PULPo."""
         x,y,seg_x,seg_y,lm_x,lm_y,mask_x,mask_y,loader = inputs
         y_pred, df_pred, y_pred_seg, outputs, individual_dfs, combined_dfs, final_dfs, warped_seg, prediction_name = preds
         output_std, individual_df_std, final_df_std, all_outputs, all_individual_dfs, all_combined_dfs, all_final_dfs, all_warped_seg = all_preds
@@ -1110,13 +1090,12 @@ class Evaluate():
         return
     
     def vis_sample_dfs(self, ax, inputs, preds, all_preds, level=0, flow=True, grid=True):
+        """ Visualizes sample deformation fields of PULPo."""
         x,y,seg_x,seg_y,lm_x,lm_y,mask_x,mask_y,loader = inputs
         y_pred, df_pred, y_pred_seg, outputs, individual_dfs, combined_dfs, final_dfs, warped_seg, prediction_name = preds
         output_std, individual_df_std, final_df_std, all_outputs, all_individual_dfs, all_combined_dfs, all_final_dfs, all_warped_seg = all_preds
 
         for samp in range(all_final_dfs[level].shape[0] if all_final_dfs[level].shape[0] < self.latent_levels else self.latent_levels):
-            # if flow==True:
-            #     ax[samp].imshow(np.rot90(flow_to_image(all_final_dfs[level])[samp].permute(1,2,0)))
             if grid == True:
                 grid_i, grid_j = self.create_warped_grid(np.rot90(all_final_dfs[level][samp].unsqueeze(0),axes=(-2,-1)), self.grid_size)
                 self.plot_grid(grid_i,grid_j, ax=ax[samp], scatter=True, lines=True, straightlines=False, color="black", linewidth=0.5)
@@ -1644,9 +1623,9 @@ class Evaluate():
                                             self.vis_combined_df_per_level,
                                             self.vis_individual_df_per_level,
                                             self.vis_jdet,
-                                            self.vis_output_std_per_level,
-                                            self.vis_individual_df_std_per_level,
-                                            self.vis_final_df_std_per_level,
+                                            self.vis_output_var_per_level,
+                                            self.vis_individual_df_var_per_level,
+                                            self.vis_final_df_var_per_level,
                                             self.vis_sample_preds,
                                             self.vis_sample_dfs,
                                             ],
@@ -1665,9 +1644,9 @@ class Evaluate():
                                                 self.vis_combined_df_per_level,
                                                 self.vis_individual_df_per_level,
                                                 self.vis_jdet,
-                                                self.vis_output_std_per_level,
-                                                self.vis_individual_df_std_per_level,
-                                                self.vis_final_df_std_per_level,
+                                                self.vis_output_var_per_level,
+                                                self.vis_individual_df_var_per_level,
+                                                self.vis_final_df_var_per_level,
                                                 self.vis_sample_preds,
                                                 self.vis_sample_segpreds,
                                                 self.vis_sample_dfs,
@@ -1685,9 +1664,9 @@ class Evaluate():
                                                 self.vis_combined_df_per_level,
                                                 self.vis_individual_df_per_level,
                                                 self.vis_jdet,
-                                                self.vis_output_std_per_level,
-                                                self.vis_individual_df_std_per_level,
-                                                self.vis_final_df_std_per_level,
+                                                self.vis_output_var_per_level,
+                                                self.vis_individual_df_var_per_level,
+                                                self.vis_final_df_var_per_level,
                                                 self.vis_sample_preds,
                                                 self.vis_sample_dfs,
                                                     ],

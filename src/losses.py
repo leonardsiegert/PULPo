@@ -3,7 +3,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from typing import Union
-from src.custom_types import OutputDictType, KLDivergenceType
 
 
 class KL_nondiagonal():
@@ -228,7 +227,7 @@ class HierarchicalKLLoss(nn.Module):
     The loss is a weighted sum of the KL divergences on each level. The weights are specified in the weight_dict."""
     def __init__(
         self,
-        KL_divergence: KLDivergenceType,
+        KL_divergence,
         weight_dict: dict[int, float],
         similarity_pyramid: bool,
         level_sizes: dict[int,torch.Tensor] = None
@@ -246,10 +245,10 @@ class HierarchicalKLLoss(nn.Module):
 
     def forward(
         self,
-        prior_mus: OutputDictType,
-        prior_sigmas: OutputDictType,
-        posterior_mus: OutputDictType,
-        posterior_sigmas: OutputDictType,
+        prior_mus: dict[int, torch.Tensor],
+        prior_sigmas: dict[int, torch.Tensor],
+        posterior_mus: dict[int, torch.Tensor],
+        posterior_sigmas: dict[int, torch.Tensor],
     ):
 
         assert self.weight_dict.keys() == prior_mus.keys()
@@ -301,9 +300,9 @@ class HierarchicalReconstructionLoss(nn.Module):
 
     def forward(
         self,
-        y_hat: OutputDictType,
+        y_hat: dict[int, torch.Tensor],
         y: torch.Tensor,
-        y_hat_seg: OutputDictType = None,
+        y_hat_seg: dict[int, torch.Tensor] = None,
         seg_y: torch.Tensor = None,
         ncc_factor: int = 100,
         dice_factor: int = 50,
@@ -341,7 +340,7 @@ class HierarchicalRegularization(nn.Module):
 
     def forward(
         self,
-        dfs: OutputDictType,
+        dfs: dict[int, torch.Tensor],
         lamb: float = 0,
     ) -> Union[torch.Tensor, tuple[torch.Tensor, dict[int, torch.Tensor]]]:
         
