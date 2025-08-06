@@ -1,8 +1,6 @@
 import torch
 from src.network_blocks import ResizeTransform
 
-
-# resize a dict of dfs to the size of the first df or a target size
 def resize_dfs(dfs: dict[int, torch.Tensor], target_size: list[int] = None) -> dict[int, torch.Tensor]:
     """ Resize a dict of deformation fields to the size of the first deformation field or to a target size."""
     scaled_dfs = {}

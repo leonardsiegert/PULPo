@@ -82,7 +82,7 @@ def L2_loss(input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
     sumdims = list(range(2, len(input_size) + 2))
     return torch.mean(torch.sum(criterion(input=input, target=target),dim=sumdims))
 
-def NCC_loss(y_pred, y_true, win_size=9, ncc_factor=100):
+def NCC_loss(y_pred, y_true, win_size=9, gamma=0.05):
     """The normalized cross-correlation loss replacing the default MSE reconstruction loss."""
         
     Ii = y_true
@@ -132,9 +132,9 @@ def NCC_loss(y_pred, y_true, win_size=9, ncc_factor=100):
     cc = cross * cross / (I_var * J_var + 1e-8)
     # mean over the batch dimension, sum over spatial dimensions
     cc = torch.mean(cc, dim=0)
-    return -torch.sum(cc) / ncc_factor
+    return -torch.sum(cc) * gamma
 
-def Soft_dice_loss(input: torch.Tensor, target: torch.Tensor, dice_factor=50) -> torch.Tensor:
+def Soft_dice_loss(input: torch.Tensor, target: torch.Tensor, dice_factor=1) -> torch.Tensor:
     input_size = input.size()[2:]
     # the dimensions over which to sum
     sumdims = list(range(2, len(input_size) + 2))
@@ -304,8 +304,8 @@ class HierarchicalReconstructionLoss(nn.Module):
         y: torch.Tensor,
         y_hat_seg: dict[int, torch.Tensor] = None,
         seg_y: torch.Tensor = None,
-        ncc_factor: int = 100,
-        dice_factor: int = 50,
+        gamma: float = 0.05,
+        dice_factor: int = 1,
     ) -> Union[torch.Tensor, tuple[torch.Tensor, dict[int, torch.Tensor]]]:
         loss: torch.Tensor = 0.0
         all_levels = {}
@@ -315,7 +315,7 @@ class HierarchicalReconstructionLoss(nn.Module):
             if "mse" in self.recon_loss:
                 all_levels[l] += w * L2_loss(y_hat[l], y_target)
             if "ncc" in self.recon_loss:
-                all_levels[l] += w * NCC_loss(y_hat[l], y_target, ncc_factor=ncc_factor, win_size=self.window_size[l])
+                all_levels[l] += w * NCC_loss(y_hat[l], y_target, gamma=gamma, win_size=self.window_size[l])
             if "dice" in self.recon_loss:
                 seg_target=F.interpolate(seg_y, size=y_hat_seg[l].size()[2:], mode=self.mode, align_corners=False)
                 all_levels[l] += w * Soft_dice_loss(y_hat_seg[l], seg_target, dice_factor=dice_factor)

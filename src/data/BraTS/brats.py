@@ -36,20 +36,6 @@ def create_data_loaders(batch_size, segs=False, lms=False, mask=False, ndims=3, 
 
     return train_loader, validation_loader, test_loader
 
-# def create_train_val_loaders(batch_size, segs=False, lms=False, mask=False, ndims=3):
-
-#     train_set = BraTS(split="training", segs=segs, lms=lms, mask=mask, ndims=ndims)
-#     val_set = BraTS(split="validation", segs=segs, lms=lms, mask=mask, ndims=ndims)
-
-#     train_loader = DataLoader(train_set, sampler=RandomSampler(train_set), batch_size=batch_size, num_workers = 1, drop_last=False)
-#     validation_loader = DataLoader(val_set, sampler=SequentialSampler(val_set), batch_size=batch_size, num_workers = 1, drop_last=False)
-#     print(
-#         "Number of training/validation patches:",
-#         (train_set.__len__(),val_set.__len__()),
-#     )
-
-#     return train_loader, validation_loader
-
 
 class BraTS(Dataset):
     def __init__(self, split, segs=False, lms=False, mask=False, ndims=3):

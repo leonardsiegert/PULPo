@@ -21,7 +21,6 @@ from src.data.OASIS import oasis
 from src.models import PULPo
 
 os.environ['NEURITE_BACKEND'] = 'pytorch'
-# TODO: import vxm?
 os.environ['VXM_BACKEND'] = 'pytorch'
 
 # seeding for reproducibility
@@ -1116,6 +1115,8 @@ class Evaluate():
 
     # Naive baseline model: affine registration
     def performance_affine(self, ndims, segs=False, lms=False, mask=False, output_dir="experiments/affine", artifact="", task="oasis"):
+        """ Evaluates the performance of a naive affine registration model. 
+            As the dataset has affine preprocessing, this equates to computing the losses on the original images."""
         with torch.no_grad():
             ndims = ndims
             self.load_data(task=task, segs=segs, lms=lms, mask=mask, ndims=ndims)
@@ -1192,6 +1193,7 @@ class Evaluate():
 
 
     def performance_vxm(self, model_dir, name, artifact="", task="oasis", segs=False, lms=False):
+        """ Evaluates the performance of the VoxelMorph baseline model with respect to various metrics."""
         with torch.no_grad():
             model = self.load_vxm(model_dir,name)
             ndims = 3
@@ -1208,10 +1210,6 @@ class Evaluate():
 
             for k, loader in enumerate(self.loaders): 
                 print(f"Evaluating on {self.loader_names[k]}")
-
-                # if self.loader_names[k] != "test":
-                #     all_metrics[:,k,:] = np.nan
-                #     continue
             
                 # loop through all inputs
                 for j, input in enumerate(loader):
@@ -1271,6 +1269,8 @@ class Evaluate():
             self.make_tables(df, "models/"+name+"/performance", name="loss_table_deterministic"+artifact)
 
     def uncertainty_vxm(self, model_dir, name, num_samples, artifact="", task="oasis",lms=False):
+        """ Evaluates the uncertainty of the VoxelMorph baseline model by calculating the NCC between the
+            variance of the output and the mean squared error, both for the image intensities and the anatomical landmarks."""
         with torch.no_grad():
             model = self.load_vxm(model_dir,name)
             ndims = 3
@@ -1288,10 +1288,6 @@ class Evaluate():
 
             for k, loader in enumerate(self.loaders): 
                 print(f"Evaluating on {self.loader_names[k]}")
-
-                # if self.loader_names[k] != "test":
-                #     all_metrics[:,k,:] = np.nan
-                #     continue
             
                 # loop through all inputs
                 for j, input in enumerate(loader):
@@ -1352,6 +1348,7 @@ class Evaluate():
             self.make_tables(df, "models/"+name+"/uncertainty", name="loss_table"+artifact)
 
     def performance(self, model_dir, git_hash, version, segs, lms, mask, task="oasis", artifact=""):
+        """ Evaluates the performance of the PULPo model with respect to various metrics."""
         with torch.no_grad():
             model = self.load_model(model_dir=model_dir, git_hash=git_hash, version=version)
             ndims = model.ndims
@@ -1382,9 +1379,6 @@ class Evaluate():
             
                 # loop through all inputs
                 for j, input in enumerate(loader):
-                    # HACK: only evaluate on 1 input, remove later
-                    # if j == 1:
-                    #     break
                     if j % 50 == 0:
                         print(f"Input {j} of {len(loader)}")
                     x = input[0].to(self.device)
@@ -1394,12 +1388,9 @@ class Evaluate():
                     lm_x = input[4].to(self.device)
                     lm_y = input[5].to(self.device)
 
-
                     if artifact != "":
                         x = self.artifact(x, method=artifact,x=(100,130), y=(100,130), z=(120,150))
                     
-
-                    # outputs, individual_dfs = model.predict(x,y,N)
                     outputs, individual_dfs = model.predict_deterministic(x,y)
                     _, final_dfs = model.combine_dfs(individual_dfs)
 
@@ -1414,7 +1405,7 @@ class Evaluate():
                     # calculate loss with all your metrics
                     level_losses = []
                     if "RMSE" in self.metric_names:
-                        mse, level_mse = hierarchical_mse(y_hat = outputs,y = y, y_hat_seg=pred_segs, seg_y=seg_y, ncc_factor = 1, dice_factor = 1)
+                        mse, level_mse = hierarchical_mse(y_hat = outputs,y = y, y_hat_seg=pred_segs, seg_y=seg_y, gamma = 1, dice_factor = 1)
                         level_rmse = {key: torch.sqrt(level_mse[key] / num_pixels[key]) for key in level_mse.keys()}
                         level_losses.append(level_rmse)
                     if "JDetStd" in self.metric_names:
@@ -1431,14 +1422,13 @@ class Evaluate():
                         if not loader.dataset.segs:
                             level_losses.append({key: 0 for key in range(self.latent_levels)})
                         else:
-                            dice, level_dice = hierarchical_dice(y_hat = outputs,y = y, y_hat_seg=pred_segs, seg_y=seg_y, ncc_factor = 1, dice_factor = 1)
+                            dice, level_dice = hierarchical_dice(y_hat = outputs,y = y, y_hat_seg=pred_segs, seg_y=seg_y, gamma = 1, dice_factor = 1)
                             level_dice = {key: 1 - (level_dice[key] / num_pixels[key]) for key in level_dice.keys()}
                             level_losses.append(level_dice)
                     if "LM_MAE" in self.metric_names:
                         if not loader.dataset.lms:
                             level_losses.append({key: 0 for key in range(self.latent_levels)})
                         else:
-                            # HACK: we don't have any levels yet
                             level_lm_mae = {key: 0 for key in range(self.latent_levels)}
                             # Make sure that the landmarks are not empty
                             if lm_x.numel() and lm_y.numel():
@@ -1479,6 +1469,8 @@ class Evaluate():
                 torch.cuda.empty_cache()
 
     def uncertainty(self, model_dir, git_hash, version, segs, lms, mask, num_samples, artifact="", task="oasis"):
+        """ Evaluates the uncertainty of the PULPo model by calculating the NCC between the
+            variance of the output and the mean squared error, both for the image intensities and the anatomical landmarks."""
         if num_samples < 2:
             raise ValueError("N has to be at least 2")
         with torch.no_grad():
@@ -1556,6 +1548,8 @@ class Evaluate():
 
 
     def run_one_model(self, model_dir, git_hash, version, segs, lms, mask, N=10, task="oasis"):
+        """ Runs the evaluation of a single PULPo model with the given parameters.
+            This includes the creation of visualizations, a performance evaluation, and an uncertainty evaluation."""
         with torch.no_grad():
             model = self.load_model(model_dir=model_dir, git_hash=git_hash, version=version)
             ndims = model.ndims
@@ -1696,6 +1690,7 @@ class Evaluate():
             return
     
     def compare_models(self, model_dir, exp_name, models, ndims, task="oasis", segs=True, model_names=None, N=10):
+        """ Compares multiple PULPo models with respect to various metrics. Exports a table with the results."""
         #####################################################################################################
         ####### NECESSARY STUFF           ###################################################################
         #####################################################################################################
@@ -1814,23 +1809,3 @@ if __name__ == '__main__':
                        mask=args.mask,
                        N=args.N,
                        task=args.task)
-
-    # # for model comparison:
-    # parser = argparse.ArgumentParser(description="Main trainer file for all models.")
-    # parser.add_argument("--model_dir", type=str,
-    #                         help="Provide relative super-directory of the models.",
-    #                         required=True)
-    # parser.add_argument("--exp_name", type=str,
-    #                         help="Provide one-word description of experiment.",
-    #                         required=True)
-    # parser.add_argument("--models", nargs="+", type=str,
-    #                         help="Provide all models you want to compare. Expected format: git_hash/version. In your case anything between the model directory and the checkpoint folder.",
-    #                         required=True)
-    # parser.add_argument("--ndims", type=int,required=True)
-    # parser.add_argument("--model_names", nargs="+", type=str,
-    #                         help="Name your models. Optional.",
-    #                         required=False)
-    # args = parser.parse_args()
-
-    # eval = Evaluate()
-    # eval.compare_models(model_dir= args.model_dir, exp_name= args.exp_name, models= args.models, ndims=args.ndims, task="oasis", segs=True, model_names=args.model_names)

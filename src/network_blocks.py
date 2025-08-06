@@ -60,7 +60,7 @@ class MuSigmaBlock(nn.Module):
         return [self._conv_mu(x), self._conv_sigma(x)]
     
 
-class ControlPoints(nn.Module):
+class VelocityField(nn.Module):
     def __init__(
         self,
         input_size: list[int],

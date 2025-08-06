@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from typing import Optional
 
 from src.utils import ModuleIntDict
-from src.network_blocks import ConvSequence, MuSigmaBlock, ControlPoints, SpatialTransformer, ResizeTransform, DFAdder, VecInt
+from src.network_blocks import ConvSequence, MuSigmaBlock, VelocityField, SpatialTransformer, ResizeTransform, DFAdder, VecInt
 
 class DownPath(nn.Module):
     def __init__(
@@ -107,7 +107,7 @@ class Autoencoder(nn.Module):
                         up_block_channels += zdim
                     elif item == "transformed":
                         up_block_channels += 1
-                    elif item in ["control_points", "individual_dfs","combined_dfs", "final_dfs"]:
+                    elif item in ["velocity_fields", "individual_dfs","combined_dfs", "final_dfs"]:
                         up_block_channels += len(input_size)
                     else:
                         raise ValueError(f"Feedback list contains {item}. Not a known option.")
@@ -158,7 +158,7 @@ class Autoencoder(nn.Module):
         x: torch.Tensor,
         down_activations: ModuleIntDict,
         deterministic: bool = False,
-    ) -> tuple[dict[int, torch.Tensor], dict[int, torch.Tensor], dict[int, torch.Tensor], dict[int, torch.Tensor], dict[int, torch.Tensor], dict[int, torch.Tensor], dict[int, torch.Tensor]]:
+    ) -> tuple[dict[int, torch.Tensor], dict[int, torch.Tensor], dict[int, torch.Tensor], dict[int, torch.Tensor], dict[int, torch.Tensor], dict[int, torch.Tensor], dict[int, torch.Tensor], dict[int, torch.Tensor]]:
 
         # dictionary for x on the scale of the latent levels. highest level having original size
         if self.df_resolution == "full_res":
@@ -175,16 +175,16 @@ class Autoencoder(nn.Module):
             level_x[0] = x
 
         # Going back up (switching to indexing by latent level)
-        mus, sigmas, samples, control_points, individual_dfs, combined_dfs, final_dfs, transformed = {}, {}, {}, {}, {}, {}, {}, {}
+        mus, sigmas, samples, velocity_fields, individual_dfs, combined_dfs, final_dfs, transformed = {}, {}, {}, {}, {}, {}, {}, {}
         for l in reversed(range(self.latent_levels)):
             k = l + self.lk_offset
             # on the lowest level
             if l == self.latent_levels - 1:
                 mus[l], sigmas[l], samples[l] = self.encoders[l](down_activations[k])
                 if deterministic:
-                    control_points[l], individual_dfs[l], combined_dfs[l], final_dfs[l], transformed[l] = self.decoders[l](mus[l], level_x[l])
+                    velocity_fields[l], individual_dfs[l], combined_dfs[l], final_dfs[l], transformed[l] = self.decoders[l](mus[l], level_x[l])
                 else:
-                    control_points[l], individual_dfs[l], combined_dfs[l], final_dfs[l], transformed[l] = self.decoders[l](samples[l], level_x[l])
+                    velocity_fields[l], individual_dfs[l], combined_dfs[l], final_dfs[l], transformed[l] = self.decoders[l](samples[l], level_x[l])
             # on all other levels
             else:
                 # the feedback connection concatenates the variables given in the parser
@@ -202,14 +202,15 @@ class Autoencoder(nn.Module):
                 mus[l], sigmas[l], samples[l] = self.encoders[l](down_activations[k], feedback=sample_upsampled)
                 # in deterministic case, we forward mu instead of samples from mu and sigma
                 if deterministic:
-                    control_points[l], individual_dfs[l], combined_dfs[l], final_dfs[l], transformed[l] = self.decoders[l](mus[l], level_x[l], combined_df=combined_dfs[l+1])
+                    velocity_fields[l], individual_dfs[l], combined_dfs[l], final_dfs[l], transformed[l] = self.decoders[l](mus[l], level_x[l], combined_df=combined_dfs[l+1])
                 else:    
-                    control_points[l], individual_dfs[l], combined_dfs[l], final_dfs[l], transformed[l] = self.decoders[l](samples[l], level_x[l], combined_df=combined_dfs[l+1])
-        return mus, sigmas, samples, control_points, individual_dfs, combined_dfs, final_dfs, transformed
+                    velocity_fields[l], individual_dfs[l], combined_dfs[l], final_dfs[l], transformed[l] = self.decoders[l](samples[l], level_x[l], combined_df=combined_dfs[l+1])
+        return mus, sigmas, samples, velocity_fields, individual_dfs, combined_dfs, final_dfs, transformed
 
 
 
 class PULPoEncoder(nn.Module):
+    """ Encoder for the PULPo model."""
     def __init__(
         self,
         sampler,
@@ -255,6 +256,7 @@ class PULPoEncoder(nn.Module):
         return mu, sigma, z
 
 class SVFDecoder(nn.Module):
+    """ Decoder for the PULPo model."""
     def __init__(
         self,
         zdim: int,
@@ -270,8 +272,8 @@ class SVFDecoder(nn.Module):
         self.outsize = outsize
         self.cp_depth = cp_depth
         
-        # to turn the sample z into control points
-        self.control_points = ControlPoints(input_size=self.insize, zdim=self.zdim, max_channels=n0, depth=self.cp_depth)
+        # to turn the sample z into a velocity field
+        self.velocity_field = VelocityField(input_size=self.insize, zdim=self.zdim, max_channels=n0, depth=self.cp_depth)
 
         # To upscale the lower DF by factor 2
         self.vel_resize_level = 1/2
@@ -290,8 +292,8 @@ class SVFDecoder(nn.Module):
         self.spatial_transform = SpatialTransformer(self.outsize)
 
     def forward(self, z: torch.Tensor, input_image: torch.Tensor, combined_df: Optional[torch.Tensor]=None) -> tuple[dict[int, torch.Tensor], dict[int, torch.Tensor], dict[int, torch.Tensor], dict[int, torch.Tensor]]:
-        # turning the sample z into control points
-        individual_df = self.control_points(z)
+        # turning the sample z into a velocity field
+        individual_df = self.velocity_field(z)
         # combine the DFs
         if combined_df is None: # on the lowest level
             combined_df = individual_df

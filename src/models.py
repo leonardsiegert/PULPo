@@ -24,7 +24,6 @@ from src.components.pulpo import DownPath, Autoencoder, PULPoEncoder, SVFDecoder
 class PULPo(ABC, pl.LightningModule):
 
     def __init__(
-        # TODO: bring in order, organize in lines
         self,
         total_levels: int,
         latent_levels: int,
@@ -32,12 +31,13 @@ class PULPo(ABC, pl.LightningModule):
         input_size: list[int],    
         lr: float=1e-4,
         recon_loss: list=["ncc"],
-        dice_factor: int=50,
+        dice_factor: int=1,
         similarity_pyramid: bool=False,
-        lamb: float=0,
+        lamb: float=0.025,
+        gamma: float=0.05,
         regularizer: str="L2",
         image_logging_frequency: int=1000,
-        feedback: list=["samples"],
+        feedback: list=["samples", "velocity_fields", "individual_dfs", "combined_dfs", "final_dfs", "transformed"],
         df_resolution: str="level_res",
         n0: int=32, # multiplier for the number of channels throughout the network
         segs: bool=False,
@@ -45,8 +45,6 @@ class PULPo(ABC, pl.LightningModule):
         mask: bool=False,
         nondiagonal: bool=False,
         cp_depth: int=3,
-        # TODO: change these arguments in accordance with paper:
-        ncc_factor: int=20,
     ) -> None:
         super().__init__()
         torch.autograd.set_detect_anomaly(True)
@@ -138,7 +136,7 @@ class PULPo(ABC, pl.LightningModule):
 
         # forward pass through the network
         down_activations = self.downpath(x,y)
-        posterior_mus, posterior_sigmas, posterior_samples, control_points, individual_dfs, combined_dfs, final_dfs, y_hat = self.autoencoder(x, down_activations)
+        posterior_mus, posterior_sigmas, posterior_samples, velocity_fields, individual_dfs, combined_dfs, final_dfs, y_hat = self.autoencoder(x, down_activations)
         prior_mus, prior_sigmas = self.prior(posterior_mus, posterior_sigmas)
         
         # if we are using segmentation maps, transform them
@@ -160,7 +158,7 @@ class PULPo(ABC, pl.LightningModule):
         kl_loss_levels.update({n: self.beta * kl_loss_levels[n] for n in kl_loss_levels.keys()})
 
         reconstruction_loss, reconstruction_loss_levels = self.hierarchical_recon_loss(
-            y_hat, y, y_hat_seg, seg_y, ncc_factor=self.hparams.ncc_factor, dice_factor=self.hparams.dice_factor)
+            y_hat, y, y_hat_seg, seg_y, gamma=self.hparams.gamma, dice_factor=self.hparams.dice_factor)
         regularization_loss, regularization_loss_levels = self.hierarchical_regularization(
             final_dfs,lamb=self.hparams.lamb)
         total_loss = kl_loss + reconstruction_loss + regularization_loss
@@ -206,7 +204,7 @@ class PULPo(ABC, pl.LightningModule):
 
         # forward pass through the network
         down_activations = self.downpath(x,y)
-        posterior_mus, posterior_sigmas, posterior_samples, control_points, individual_dfs, combined_dfs, final_dfs, y_hat = self.autoencoder(x, down_activations)
+        posterior_mus, posterior_sigmas, posterior_samples, velocity_fields, individual_dfs, combined_dfs, final_dfs, y_hat = self.autoencoder(x, down_activations)
         prior_mus, prior_sigmas = self.prior(posterior_mus, posterior_sigmas)
 
         # if we are using segmentations, transform them
@@ -228,7 +226,7 @@ class PULPo(ABC, pl.LightningModule):
         kl_loss_levels.update({n: self.beta * kl_loss_levels[n] for n in kl_loss_levels.keys()})
                 
         reconstruction_loss, reconstruction_loss_levels = self.hierarchical_recon_loss(
-            y_hat, y, y_hat_seg, seg_y, ncc_factor=self.hparams.ncc_factor, dice_factor=self.hparams.dice_factor)
+            y_hat, y, y_hat_seg, seg_y, gamma=self.hparams.gamma, dice_factor=self.hparams.dice_factor)
         regularization_loss, regularization_loss_levels = self.hierarchical_regularization(
             final_dfs,lamb=self.hparams.lamb)
         total_loss = kl_loss + reconstruction_loss + regularization_loss
@@ -316,7 +314,7 @@ class PULPo(ABC, pl.LightningModule):
         xb = torch.vstack([x for _ in range(N)])
         yb = torch.vstack([y for _ in range(N)])
         down_activations = self.downpath(xb, yb)
-        posterior_mus, posterior_sigmas, z, control_points, individual_dfs, combined_dfs, final_dfs, outputs = self.autoencoder(xb, down_activations)
+        posterior_mus, posterior_sigmas, z, velocity_fields, individual_dfs, combined_dfs, final_dfs, outputs = self.autoencoder(xb, down_activations)
         # reshape them from BxN,C,H,W(,D) to B,N,C,H,W(,D)
         outputs_reshaped = {key:outputs[key].view([N, bs]+[*outputs[key].shape][1:]).transpose(0,1) for key in outputs}
         individual_dfs_reshaped = {key:individual_dfs[key].view([N, bs]+[*individual_dfs[key].shape][1:]).transpose(0,1) for key in individual_dfs}
@@ -334,7 +332,7 @@ class PULPo(ABC, pl.LightningModule):
     
     def predict_deterministic(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
         down_activations = self.downpath(x, y)
-        mu, _, z, control_points, individual_dfs, combined_dfs, final_dfs, outputs = self.autoencoder(x, down_activations, deterministic=True)
+        mu, _, z, velocity_fields, individual_dfs, combined_dfs, final_dfs, outputs = self.autoencoder(x, down_activations, deterministic=True)
         return outputs, individual_dfs
 
 
