@@ -3,7 +3,7 @@
 A PyTorch Lightning implementation of PULPo for probabilistic deformable medical image registration with uncertainty quantification using a hierarchical variational autoencoder (VAE) architecture. This repository contains the code for our publication at the MICCAI conference in 2024 (https://conferences.miccai.org/2024).
 
 **Paper**: [PULPo: Probabilistic Unsupervised Laplacian Pyramid Registration](https://papers.miccai.org/miccai-2024/paper/1433_paper.pdf)  
-**Preprint**: [arXiv:2407.10567](https://arxiv.org/pdf/2407.10567)
+**Preprint**: [arXiv:2407.10567](https://arxiv.org/pdf/2407.10567)  
 **Research Group**: [ML in Medical Image Analysis] (https://www.mlmia-unitue.de/)
 
 
