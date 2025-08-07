@@ -37,7 +37,7 @@ class PULPo(ABC, pl.LightningModule):
         gamma: float=0.05,
         regularizer: str="L2",
         image_logging_frequency: int=1000,
-        feedback: list=["samples", "velocity_fields", "individual_dfs", "combined_dfs", "final_dfs", "transformed"],
+        feedback: list=["samples", "velocity_field", "individual_dfs", "combined_dfs", "final_dfs", "transformed"],
         df_resolution: str="level_res",
         n0: int=32, # multiplier for the number of channels throughout the network
         segs: bool=False,

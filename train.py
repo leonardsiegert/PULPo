@@ -18,7 +18,7 @@ dataset = "brats" # "brats" or "oasis"
 segs = False
 lms = False
 mask = False
-feedback = ["samples", "velocity_fields", "individual_dfs", "combined_dfs", "final_dfs", "transformed"]
+feedback = ["samples", "velocity_field", "individual_dfs", "combined_dfs", "final_dfs", "transformed"]
 df_resolution = "level_res"
 ndims = 3
 batch_size = 1
@@ -108,7 +108,6 @@ def main(hparams):
         val_check_interval=0.1,
         log_every_n_steps=5,
         accelerator=hparams.accelerator,
-        devices=hparams.devices,
         callbacks=checkpoint_callbacks,
         max_epochs= hparams.max_epochs,
     )
@@ -140,7 +139,6 @@ if __name__ == "__main__":
         type=int,
         help="Random seed for pl.seed_everything function.",
     )
-    parser.add_argument("--devices", type=int, default=None)
     parser.add_argument("--max_epochs", type=int, default=1000)
     parser.add_argument("--accelerator", type=str, default=accelerator, help="Accelerator to use. Default is gpu. Alternative for local training: cpu.")
     parser.add_argument("--dataset", type=str, default=dataset, help="Dataset to use. Default is brats. Alternative: oasis.")
@@ -159,7 +157,7 @@ if __name__ == "__main__":
     parser.add_argument("--lambda", type=float, default=lamb, dest="lamb", help="Lambda of regularization. Setting to 0 equals no regularization.")
     parser.add_argument("--regularizer", type=str, default=regularizer, help="Regularizer to use. Default is L2. Alternatives: jdet.")
     parser.add_argument("--image_logging_frequency", type=int, default=image_logging_frequency)
-    parser.add_argument("--feedback", nargs='+', default=feedback, help="Feedback connection between sampling layers. Default includes all options. Options: samples, velocity_fields, individual_dfs, combined_dfs, final_dfs, transformed.")
+    parser.add_argument("--feedback", nargs='+', default=feedback, help="Feedback connection between sampling layers. Default includes all options. Options: samples, velocity_field, individual_dfs, combined_dfs, final_dfs, transformed.")
     parser.add_argument("--df_resolution", type=str, default=df_resolution, help="Whether the dfs and thus transformed images are created at the resolution of 2x the sampling or at full resolution. Options: full_res, level_res.")
     parser.add_argument("--n0", type=int, default=32, help="Multiplier for the number of channels throughout the network")
     parser.add_argument("--ndims", type=int, default=ndims, help="Choose here if you want to work with volumes (3) or slices (2). Default is 3.")

@@ -68,6 +68,26 @@ class Evaluate():
         checkpoint = glob.glob(filepath)[0]
         return checkpoint
     
+    def remap_checkpoint_keys(self, checkpoint):
+        """Remap old parameter names to new ones"""
+        if 'state_dict' in checkpoint:
+            state_dict = checkpoint['state_dict']
+        else:
+            state_dict = checkpoint
+        
+        new_state_dict = {}
+        for key, value in state_dict.items():
+            # Replace the old key pattern with the new one
+            new_key = key.replace('control_points', 'velocity_field')
+            new_state_dict[new_key] = value
+        
+        # Update the checkpoint
+        if 'state_dict' in checkpoint:
+            checkpoint['state_dict'] = new_state_dict
+            return checkpoint
+        else:
+            return new_state_dict
+    
     def load_model(self, model_dir, git_hash, version):
         """ Loads the PULPo model from a given directory. git_has and version required as this is 
             how the trained models are saved."""
@@ -75,7 +95,16 @@ class Evaluate():
         checkpoint = self.build_path(model_dir, name)
         self.output_dir = model_dir + "/" + name + "/" + "evaluation"
         os.makedirs(self.output_dir, exist_ok=True)
-        model = PULPo.load_from_checkpoint(checkpoint).to(self.device)
+
+        try:
+            model = PULPo.load_from_checkpoint(checkpoint).to(self.device)
+        except:
+            print("Loading model failed, trying to load with old keys.")
+            checkpoint_loaded = torch.load(checkpoint, map_location=self.device)
+            checkpoint_loaded = self.remap_checkpoint_keys(checkpoint_loaded)
+            torch.save(checkpoint_loaded, checkpoint)  # save the remapped checkpoint back to file
+            model = PULPo.load_from_checkpoint(checkpoint).to(self.device)
+
         model.eval()
         self.model = model
         self.latent_levels = model.latent_levels

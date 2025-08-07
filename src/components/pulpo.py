@@ -109,6 +109,10 @@ class Autoencoder(nn.Module):
                         up_block_channels += 1
                     elif item in ["velocity_fields", "individual_dfs","combined_dfs", "final_dfs"]:
                         up_block_channels += len(input_size)
+                    elif item == "control_points":
+                        # for backwards compatibility. renamed from control points to velocity fields in the latest version
+                        item = "velocity_fields"
+                        up_block_channels += len(input_size)
                     else:
                         raise ValueError(f"Feedback list contains {item}. Not a known option.")
         self.up_blocks = ModuleIntDict()
@@ -191,6 +195,9 @@ class Autoencoder(nn.Module):
                 feedback = []
                 down_size = down_activations[k].size()[2:]
                 for item in self.feedback:
+                    if item == "control_points":
+                        # for backwards compatibility. renamed from control points to velocity fields in the latest version
+                        item = "velocity_fields"
                     try:
                         feedback.append(F.interpolate(locals()[item][l+1],size=down_size,mode=self.mode, align_corners=False))  
                     except:
